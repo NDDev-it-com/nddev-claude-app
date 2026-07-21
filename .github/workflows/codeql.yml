@@ -1,0 +1,27 @@
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "20 7 * * 1"
+
+permissions: {}
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  codeql:
+    name: CodeQL
+    permissions:
+      contents: read # Analyze repository source and workflow definitions.
+      security-events: write # Upload the CodeQL SARIF results.
+      actions: read # Read workflow metadata required by CodeQL analysis.
+    uses: NDDev-it-com/ci-workflows/.github/workflows/public-codeql.yml@eb7bd953dc9741e559cb9e357c2d36c9b4de5a88 # 0.10.0
+    with:
+      languages: '["python", "actions"]'
+      queries: security-and-quality

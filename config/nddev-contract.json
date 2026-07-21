@@ -31,7 +31,6 @@
     "plugin_version_ref": "build/version.json:nddev_builder_plugin_version"
   },
   "managed_state": {
-    "_research_gated": "exact ~/.claude install layout + settings.json plugin-enable keys are confirmed against current Claude Code format before finalizing",
     "target_env": "CLAUDE_CONFIG_DIR",
     "backup_slots": 10,
     "managed_file_mode": "0600",
@@ -42,5 +41,11 @@
     "preserve_unmanaged_files": true,
     "reject_symlink_managed_files": true,
     "rollback_on_failure": true
+  },
+  "runtime_compatibility": {
+    "product": "Claude Code",
+    "tested_version_ref": "build/version.json:claude_code_tested",
+    "min_version_ref": "build/version.json:claude_code_min",
+    "baseline_ref": "references/claude-baseline.json"
   }
 }

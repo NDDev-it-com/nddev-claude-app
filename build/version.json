@@ -3,6 +3,7 @@
   "build_version": "0.1.0",
   "nddev_builder_plugin_version": "0.1.0",
   "python_requires": ">=3.10",
-  "claude_code_tested": "PENDING-RESEARCH",
-  "runtime_baseline_ref": "references/claude-baseline.json"
+  "claude_code_tested": "2.1.211",
+  "runtime_baseline_ref": "references/claude-baseline.json",
+  "claude_code_min": "2.1.154"
 }

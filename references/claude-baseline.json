@@ -4,12 +4,30 @@
   "config_dir": "~/.claude",
   "config_dir_env": "CLAUDE_CONFIG_DIR",
   "settings_file": "settings.json",
-  "managed_settings_keys": ["extraKnownMarketplaces", "enabledPlugins"],
-  "cli_owned": ["plugins/known_marketplaces.json", "plugins/marketplaces", "plugins/cache", "plugins/data"],
-  "never_touch": [".credentials.json", "projects", "~/.claude.json"],
+  "managed_settings_keys": [
+    "extraKnownMarketplaces",
+    "enabledPlugins"
+  ],
+  "cli_owned": [
+    "plugins/known_marketplaces.json",
+    "plugins/marketplaces",
+    "plugins/cache",
+    "plugins/data"
+  ],
+  "never_touch": [
+    ".credentials.json",
+    "projects",
+    "~/.claude.json"
+  ],
   "plugin_manifest": ".claude-plugin/plugin.json",
   "marketplace_manifest": ".claude-plugin/marketplace.json",
-  "plugin_manifest_required": ["name"],
-  "marketplace_manifest_required": ["name", "owner", "plugins"],
-  "verified_against": "PENDING-RESEARCH-PIN"
+  "plugin_manifest_required": [
+    "name"
+  ],
+  "marketplace_manifest_required": [
+    "name",
+    "owner",
+    "plugins"
+  ],
+  "verified_against": "Claude Code 2.1.211 (2026-07-15)"
 }

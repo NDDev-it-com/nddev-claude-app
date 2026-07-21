@@ -1,37 +1,55 @@
-# nddev-claude-app — repository contract
-
-> Provisional hand-authored contract. This repository is intended to be
-> GDS-onboarded like the sibling modules; once `gds` runs, AGENTS.md and
-> `.claude/CLAUDE.md` become generated projections of `.gds/repository.yaml`.
+<!--
+GENERATED FILE - DO NOT EDIT DIRECTLY
+generator: gds
+bundle: 0.1.0-dev
+source-commit: f77ee6ece659be46309117db01b81f3255f9a552
+input-digest: sha256:ac085c7d59851ae6b548d993bb6f88c676403bacd62d7995bbd6faa8d74421d2
+output-digest: sha256:50e2f5b021b6d7cf30017ab8221a4ceea672661dcc406a88f63937940e9e1128
+edit-source:
+  - .gds/repository.yaml
+  - policies/base/repository-default.yaml
+  - policies/owners/organization-default.yaml
+  - policies/roles/public-module.yaml
+  - templates/agents/repository.md.tmpl
+  - templates/github-actions/go.yml.tmpl
+  - templates/harnesses/claude.md.tmpl
+-->
+# GDS repository contract
 
 ## Scope
 
-- Public module: a dependency-free Claude Code marketplace/plugin setup manager
-  plus the native `nddev-builder` marketplace.
-- Roles: `module`. Visibility: `public`. Data: `public`.
+- Repository ID: `repo_01KY1XGCD38XPD7DE6861TCD6D`.
+- Roles: `module`.
+- Canonical repository facts: `.gds/repository.yaml`.
+- Applied bundle: `.gds/bundle.lock.yaml` (`0.1.0-dev`).
+- Compiled policy: `.gds/compiled-policy.json`.
 
 ## Boundaries
 
-- Treat this Git repository as one independent mutation boundary.
+- This Git repository is one independent mutation boundary.
 - Preserve unrelated branches, worktrees, submodules, and dirty changes.
-- Private tests, benchmarks, and validation tooling live in the `nddev-harnesses`
-  control plane, never here.
+- Resolve cross-repository work with `gds context --json` before acting.
+- Generated files are projections; change their canonical inputs and regenerate.
 
 ## Safety
 
-- External writes require explicit approval.
-- The manager owns only its `extraKnownMarketplaces`/`enabledPlugins` keys and
-  its stamp in a target `~/.claude`; it never touches `.credentials.json`,
-  `projects/`, `~/.claude.json`, or the CLI-owned `plugins/` registry.
-- Do not commit credentials, runtime state, or generated evidence.
+- External writes require explicit approval: `true`.
+- Generated projection edits: `forbidden`.
+- Private parent context persistence: `forbidden`.
+- Visibility contract: `public`; data classification: `public`.
 
-## Verification
+## Development
 
-```bash
-python3 cli-tools/validate_public_contracts.py
-```
+- Test: `python3 cli-tools/validate_public_contracts.py`.
+
+## Agent routing
+
+- Active skill profiles: `core, module`.
+- Use on-demand skills for procedures; do not duplicate them here.
+- Treat docs and memories as derived evidence, not mutation authority.
 
 ## Done
 
-- Required checks pass or are explicitly reported `NOT_PROVEN`.
-- No secret, private-context leak, or unrelated change is introduced.
+- Required verification is complete or explicitly `NOT_PROVEN`.
+- Git state and every affected repository boundary are classified.
+- No private data, secret, or unapproved generated drift is introduced.

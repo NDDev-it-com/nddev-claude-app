@@ -224,7 +224,9 @@ def compose_settings(current: dict[str, Any], setup: Setup) -> dict[str, Any]:
     return result
 
 
-def strip_managed(current: dict[str, Any], marketplace_name: str, enable_keys: list[str]) -> dict[str, Any]:
+def strip_managed(
+    current: dict[str, Any], marketplace_name: str, enable_keys: list[str]
+) -> dict[str, Any]:
     """Return current settings with the given managed marketplace + enable keys
     removed, preserving all siblings. Empty managed maps are dropped."""
     result = dict(current)
@@ -358,7 +360,11 @@ def _commit(target: Path, new_settings: dict[str, Any], setup: Setup | None) -> 
 
 def plan(target: Path, setup: Setup) -> dict[str, Any]:
     status = inspect_target(target)
-    if status["state"] == "managed" and status["setup_id"] == setup.setup_id and not status["drift"]:
+    if (
+        status["state"] == "managed"
+        and status["setup_id"] == setup.setup_id
+        and not status["drift"]
+    ):
         operation = "noop"
     elif status["state"] in {"missing", "unmanaged"}:
         operation = "install"

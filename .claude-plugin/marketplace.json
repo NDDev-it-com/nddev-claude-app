@@ -1,0 +1,14 @@
+{
+  "name": "nddev-builder",
+  "owner": { "name": "Danil Silantyev / NDDev", "email": "danilsilantyevnewlife@gmail.com" },
+  "description": "NDDev toolkit for authoring and validating native Claude Code plugins, skills, commands, subagents, hooks, and MCP servers.",
+  "plugins": [
+    {
+      "name": "nddev-builder",
+      "source": "./plugins/nddev-builder",
+      "description": "Create and validate native Claude Code artifacts with conservative generators and deterministic checkers.",
+      "category": "development",
+      "tags": ["developer-tools", "plugins", "skills", "claude-code", "nddev"]
+    }
+  ]
+}

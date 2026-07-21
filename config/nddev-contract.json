@@ -12,12 +12,20 @@
     "catalog_root": "setups",
     "stamp_file": "NDDEV-CLAUDE-SETUP.json",
     "stamp_schema": 1,
-    "commands": ["list", "status", "plan", "apply", "switch", "restore", "remove"],
+    "commands": [
+      "list",
+      "status",
+      "plan",
+      "apply",
+      "switch",
+      "restore",
+      "remove"
+    ],
     "plan_mutates": false
   },
   "plugin_marketplace": {
     "marketplace_id": "nddev-builder",
-    "marketplace_manifest": "plugins/nddev-builder/.claude-plugin/marketplace.json",
+    "marketplace_manifest": ".claude-plugin/marketplace.json",
     "plugin_id": "nddev-builder",
     "plugin_manifest": "plugins/nddev-builder/.claude-plugin/plugin.json",
     "plugin_version_ref": "build/version.json:nddev_builder_plugin_version"

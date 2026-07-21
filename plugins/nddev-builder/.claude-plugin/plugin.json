@@ -1,0 +1,11 @@
+{
+  "name": "nddev-builder",
+  "version": "0.1.0",
+  "description": "Create and validate native Claude Code skills, plugins, marketplaces, subagents, hooks, and MCP servers.",
+  "author": { "name": "Danil Silantyev / NDDev", "url": "https://github.com/rldyourmnd" },
+  "homepage": "https://github.com/NDDev-it-com/nddev-claude-app/tree/main/plugins/nddev-builder",
+  "repository": "https://github.com/NDDev-it-com/nddev-claude-app",
+  "license": "AGPL-3.0-or-later",
+  "keywords": ["claude-code", "developer-tools", "plugins", "skills", "nddev"],
+  "skills": "./skills/"
+}

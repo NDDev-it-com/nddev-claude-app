@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "name": "nddev-claude-app",
+  "build_version": "0.1.0",
+  "entrypoint": "python3 cli-tools/nddev_claude.py",
+  "source_root": "setups",
+  "setup_ids": ["stable", "edge"],
+  "managed_state": {
+    "settings_file": "settings.json",
+    "owned_keys": ["extraKnownMarketplaces.<marketplace-name>", "enabledPlugins.<plugin>@<marketplace>"],
+    "stamp_file": "NDDEV-CLAUDE-SETUP.json",
+    "stamp_schema": 1,
+    "cli_owned_preserved": ["plugins/known_marketplaces.json", "plugins/marketplaces", "plugins/cache", "plugins/data"],
+    "never_touched": [".credentials.json", "projects", "~/.claude.json"]
+  },
+  "command_policy": {
+    "json_supported": ["status", "plan", "apply", "switch", "restore", "remove"],
+    "plan_mutates": false,
+    "target_required": ["status", "plan", "apply", "switch", "restore", "remove"],
+    "restore_backup_option": "--backup <0..9>"
+  },
+  "backup_policy": {
+    "canonical_target_bound": true,
+    "location": "sibling .<target-name>.nddev-claude-backups",
+    "slots": 10
+  },
+  "transaction_policy": {
+    "staging": "same-directory temporary file",
+    "managed_file_mode": "0600",
+    "new_target_mode": "0700",
+    "preserve_unmanaged_keys": true,
+    "reject_symlink_managed_files": true,
+    "rollback_on_failure": true,
+    "atomic_rename": true
+  },
+  "plugin_marketplace": {
+    "contract_ref": "config/nddev-contract.json:plugin_marketplace",
+    "marketplace_id": "nddev-builder",
+    "marketplace_manifest": ".claude-plugin/marketplace.json",
+    "plugin_id": "nddev-builder",
+    "plugin_manifest": "plugins/nddev-builder/.claude-plugin/plugin.json",
+    "plugin_version_ref": "build/version.json:nddev_builder_plugin_version"
+  },
+  "runtime_compatibility": {
+    "product": "Claude Code",
+    "tested_version_ref": "build/version.json:claude_code_tested",
+    "baseline_ref": "references/claude-baseline.json"
+  }
+}

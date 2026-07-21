@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.serena/
+*.log
+*.tmp
+.*.nddev-codex.lock/
+.*.nddev-codex-backups/

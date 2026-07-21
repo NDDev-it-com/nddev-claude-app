@@ -1,0 +1,38 @@
+{
+  "contract_version": 1,
+  "product_name": "nddev-claude-app",
+  "display_name": "NDDev Claude Code Setup Manager",
+  "github_repository": "NDDev-it-com/nddev-claude-app",
+  "license": "AGPL-3.0-or-later",
+  "description": "Dependency-free manager that installs, updates, switches, and removes a selected NDDev Claude Code marketplace of plugins in a caller-selected Claude Code home, owning only managed files with atomic backups and rollback.",
+  "manifest_ref": "build/manifest.json",
+  "version_ref": "build/version.json",
+  "source_root": "setups",
+  "setup_system": {
+    "catalog_root": "setups",
+    "stamp_file": "NDDEV-CLAUDE-SETUP.json",
+    "stamp_schema": 1,
+    "commands": ["list", "status", "plan", "apply", "switch", "restore", "remove"],
+    "plan_mutates": false
+  },
+  "plugin_marketplace": {
+    "marketplace_id": "nddev-builder",
+    "marketplace_manifest": "plugins/nddev-builder/.claude-plugin/marketplace.json",
+    "plugin_id": "nddev-builder",
+    "plugin_manifest": "plugins/nddev-builder/.claude-plugin/plugin.json",
+    "plugin_version_ref": "build/version.json:nddev_builder_plugin_version"
+  },
+  "managed_state": {
+    "_research_gated": "exact ~/.claude install layout + settings.json plugin-enable keys are confirmed against current Claude Code format before finalizing",
+    "target_env": "CLAUDE_CONFIG_DIR",
+    "backup_slots": 10,
+    "managed_file_mode": "0600",
+    "new_target_mode": "0700"
+  },
+  "safety": {
+    "external_writes_require_approval": true,
+    "preserve_unmanaged_files": true,
+    "reject_symlink_managed_files": true,
+    "rollback_on_failure": true
+  }
+}

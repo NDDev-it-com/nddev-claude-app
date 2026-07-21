@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "edge",
+  "description": "Auto-updating edge channel from a distinct marketplace name.",
+  "marketplace": {
+    "name": "nddev-builder-edge",
+    "source": { "source": "github", "repo": "NDDev-it-com/nddev-claude-app", "ref": "main" },
+    "auto_update": true,
+    "plugins": ["nddev-builder"]
+  }
+}

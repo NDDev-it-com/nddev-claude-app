@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "stable",
+  "description": "Pinned stable channel of the NDDev builder marketplace.",
+  "marketplace": {
+    "name": "nddev-builder",
+    "source": { "source": "github", "repo": "NDDev-it-com/nddev-claude-app" },
+    "auto_update": false,
+    "plugins": ["nddev-builder"]
+  }
+}

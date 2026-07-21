@@ -1,7 +1,7 @@
 schema_version: 1
 
 repository:
-  id: "PENDING-GDS-ONBOARD"          # assigned by `gds onboard`
+  id: "repo_01KY1XGCD38XPD7DE6861TCD6D"
   display_name: "nddev-claude-app"
   roles:
     - "module"
@@ -10,7 +10,7 @@ repository:
 provider:
   type: "github"
   installation: "installation:github-organization"
-  repository_id: 0                    # assigned on GitHub repo creation
+  repository_id: 1307421318
   owner: "NDDev-it-com"
   name: "nddev-claude-app"
 
@@ -48,3 +48,16 @@ agent:
   serena:
     enabled: false
     provenance_required: false
+
+module:
+  contract: "public"
+  consumption:
+    - "git-submodule"
+  compatibility: "semver"
+  pin_policy: "default-branch-commit"
+  publication:
+    registry: "none"
+    github_release: "required"
+
+release:
+  mode: "github-release"

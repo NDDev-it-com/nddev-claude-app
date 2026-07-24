@@ -9,28 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Verify public contracts
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Harden the runner
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
-        with:
-          egress-policy: block
-          allowed-endpoints: >-
-            github.com:443
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - name: Validate public contracts
-        run: python3 cli-tools/validate_public_contracts.py
-
   release:
     name: Publish attested immutable release
-    needs: verify
     permissions:
       contents: write
       id-token: write

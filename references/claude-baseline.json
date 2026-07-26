@@ -1,6 +1,103 @@
 {
   "schema_version": 1,
   "product": "Claude Code",
+  "verified_against": "Claude Code 2.1.220",
+  "verified_at": "2026-07-26",
+  "official_sources": [
+    "https://code.claude.com/docs/en/setup",
+    "https://code.claude.com/docs/en/env-vars",
+    "https://code.claude.com/docs/en/settings",
+    "https://code.claude.com/docs/en/plugin-marketplaces",
+    "https://code.claude.com/docs/en/plugins-reference",
+    "https://github.com/anthropics/claude-code/blob/main/.claude-plugin/marketplace.json",
+    "https://registry.npmjs.org/@anthropic-ai/claude-code",
+    "https://downloads.claude.ai/claude-code-releases/latest",
+    "https://downloads.claude.ai/claude-code-releases/2.1.220/manifest.json",
+    "https://claude.ai/install.sh",
+    "https://claude.ai/install.ps1"
+  ],
+  "distribution": {
+    "npm_package": "@anthropic-ai/claude-code",
+    "dist_tags": {
+      "latest": "2.1.220",
+      "next": "2.1.220",
+      "stable": "2.1.212"
+    },
+    "latest_tarball": {
+      "version": "2.1.220",
+      "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.220.tgz",
+      "integrity": "sha512-ogBrvwkqF9f8okmnXKxmRNHuvtFxFEffe5pWdqOV3iQDxlUOKirFqnyWC7NGXXnDA4WkkbPH8pvSbwyCR2Auyw==",
+      "shasum": "29e7249f01f9602b78c2d5f3c2f1c8a11b2ebcb4",
+      "unpacked_size": 165478,
+      "bin": {
+        "claude": "bin/claude.exe"
+      },
+      "optional_dependencies": {
+        "@anthropic-ai/claude-code-darwin-arm64": "2.1.220",
+        "@anthropic-ai/claude-code-darwin-x64": "2.1.220",
+        "@anthropic-ai/claude-code-linux-arm64": "2.1.220",
+        "@anthropic-ai/claude-code-linux-arm64-musl": "2.1.220",
+        "@anthropic-ai/claude-code-linux-x64": "2.1.220",
+        "@anthropic-ai/claude-code-linux-x64-musl": "2.1.220",
+        "@anthropic-ai/claude-code-win32-arm64": "2.1.220",
+        "@anthropic-ai/claude-code-win32-x64": "2.1.220"
+      }
+    },
+    "native_release_manifest": {
+      "version": "2.1.220",
+      "buildDate": "2026-07-24T22:28:51Z",
+      "commit": "4073f59596e272f39393db4f96abc5f4b10eff21",
+      "platforms": {
+        "darwin-arm64": {
+          "binary": "claude",
+          "checksum": "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081",
+          "size": 256908272
+        },
+        "darwin-x64": {
+          "binary": "claude",
+          "checksum": "dca7be0aa7d3d924836d440e0c6d8e3d47ef3c8e61fa5809b54b9017170ce2f3",
+          "size": 266397712
+        },
+        "linux-arm64": {
+          "binary": "claude",
+          "checksum": "159e4a51d796f3bf14677577100f7efb845611b1ceaf0c30cbd8d4650d942185",
+          "size": 271825824
+        },
+        "linux-arm64-musl": {
+          "binary": "claude",
+          "checksum": "5eb2697a1500c1b8736e53fd696392196dc6758cf1d470c64d8d2a2fd1629eeb",
+          "size": 265074024
+        },
+        "linux-x64": {
+          "binary": "claude",
+          "checksum": "674f61f20ff306f3100cf9200e4c36c4b70278b5bef2884549819b942a89c863",
+          "size": 275012592
+        },
+        "linux-x64-musl": {
+          "binary": "claude",
+          "checksum": "f1c20514a3571cdf9982e25c490042d740ed7cfed3f00c64ba92dc7ec47c3c5b",
+          "size": 269636176
+        },
+        "win32-arm64": {
+          "binary": "claude.exe",
+          "checksum": "07343ace8a2e9ba87eed716e9c0261ce4bda8954c316695e4cb26fd0605de13c",
+          "size": 260095648
+        },
+        "win32-x64": {
+          "binary": "claude.exe",
+          "checksum": "af5bf1f1b2aadffc768eccd787084c6fdf9ba81624cbe96c1c6d9ac1a1550231",
+          "size": 265720480
+        }
+      }
+    },
+    "installer_audit": {
+      "managed_by_this_module": false,
+      "read_only_verified": true,
+      "install_sh_sha256": "cde4f1702d3b1695f92b73d26888364e17bca476e17f0fd676484c951d36c125",
+      "install_ps1_sha256": "cd17c6b555f761d60373659824bf805e1510538226e4c7028e19d7494937a333",
+      "limitation": "Official native installers download under the caller HOME and then run the downloaded Claude binary install command; nddev-claude-app does not install, update, launch, or repair system Claude Code binaries."
+    }
+  },
   "config_dir": "~/.claude",
   "config_dir_env": "CLAUDE_CONFIG_DIR",
   "settings_file": "settings.json",
@@ -19,6 +116,26 @@
     "projects",
     "~/.claude.json"
   ],
+  "settings_surface": {
+    "enabledPlugins": "plugin-name@marketplace-name boolean entries in settings.json",
+    "extraKnownMarketplaces": "marketplace source entries in settings.json",
+    "pluginConfigs": "Claude Code-owned plugin option values; not managed by this module",
+    "strictKnownMarketplaces": "managed settings only; not authored by this module"
+  },
+  "native_plugin_surfaces": [
+    "skills",
+    "commands",
+    "agents",
+    "hooks",
+    "mcpServers",
+    "lspServers",
+    "monitors",
+    "themes",
+    "userConfig",
+    "channels",
+    "dependencies",
+    "defaultEnabled"
+  ],
   "plugin_manifest": ".claude-plugin/plugin.json",
   "marketplace_manifest": ".claude-plugin/marketplace.json",
   "plugin_manifest_required": [
@@ -28,6 +145,5 @@
     "name",
     "owner",
     "plugins"
-  ],
-  "verified_against": "Claude Code 2.1.220 (2026-07-26)"
+  ]
 }

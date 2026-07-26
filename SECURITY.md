@@ -24,8 +24,13 @@ days. These targets are best-effort.
 
 - The CLI never defaults to `~/.claude`; target operations require an explicit
   absolute `--target`.
-- The target, its managed files, backup pool, and catalog reject unsafe
-  symlinks and special files. Managed files also reject hard-link aliases.
+- The target parent, target, transaction directories, backup pool, and managed
+  files must be owned by the current user and private. Targets and directories
+  require `0700`-compatible modes; managed files require `0600`-compatible
+  modes.
+- The target, its managed files, backup pool, and catalog use no-follow
+  inspection and reject unsafe symlinks, dangling symlinks, special files, and
+  hard-link aliases.
 - The setup lifecycle changes only the managed `settings.json` keys
   (`extraKnownMarketplaces.<marketplace-name>` and
   `enabledPlugins.<plugin>@<marketplace>`) and writes the
@@ -40,11 +45,18 @@ days. These targets are best-effort.
 - Existing unmanaged managed-path names and drifted managed files fail closed.
 - Backup envelopes and installed stamps are bound to the canonical target; the
   backup pool is the sibling `.<target-name>.nddev-claude-backups` directory
-  with ten slots, restorable through `restore --backup <0..9>`.
-- Mutations use an exclusive sibling lock, same-parent staging, an atomic
-  rename, bounded backup rotation, postcondition checks, and rollback on
-  failure.
+  with ten slots, restorable through `restore --backup <0..9>`. A pre-existing
+  collision at that path is never removed unless it carries the expected
+  NDDev marker and target binding.
+- Mutations use an exclusive sibling lock, unique same-parent transaction
+  directories, atomic renames, bounded backup rotation, postcondition checks,
+  and rollback on failure. Rollback restores managed bytes, file modes, and
+  target existence; fresh failed installs remove their created target and
+  transaction artifacts.
 - Managed and backup files use owner-only permissions.
+- `status` and `plan` are side-effect-free and never execute the `claude`
+  binary. This module does not install, update, launch, or repair system Claude
+  Code binaries.
 - `apply` and `switch` register the `nddev-builder` marketplace and enable its
   plugin through the managed `settings.json` keys only. They do not bypass
   normal Claude Code configuration precedence or administrator-managed

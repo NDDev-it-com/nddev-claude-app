@@ -4,7 +4,7 @@
   "display_name": "NDDev Claude Code Setup Manager",
   "github_repository": "NDDev-it-com/nddev-claude-app",
   "license": "AGPL-3.0-or-later",
-  "description": "Dependency-free manager that installs, updates, switches, and removes a selected NDDev Claude Code marketplace of plugins in a caller-selected Claude Code home, owning only managed files with atomic backups and rollback.",
+  "description": "Dependency-free manager that registers, updates, switches, and removes a selected NDDev Claude Code marketplace of plugins in a caller-selected Claude Code config directory, owning only managed settings and stamp files with atomic backups and rollback.",
   "manifest_ref": "build/manifest.json",
   "version_ref": "build/version.json",
   "source_root": "setups",

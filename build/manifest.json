@@ -11,25 +11,40 @@
     "stamp_file": "NDDEV-CLAUDE-SETUP.json",
     "stamp_schema": 1,
     "cli_owned_preserved": ["plugins/known_marketplaces.json", "plugins/marketplaces", "plugins/cache", "plugins/data"],
-    "never_touched": [".credentials.json", "projects", "~/.claude.json"]
+    "never_touched": [".credentials.json", "projects", "~/.claude.json"],
+    "target_env": "CLAUDE_CONFIG_DIR"
   },
   "command_policy": {
     "json_supported": ["status", "plan", "apply", "switch", "restore", "remove"],
     "plan_mutates": false,
+    "status_mutates": false,
+    "executes_claude_binary": false,
+    "software_lifecycle_managed": false,
     "target_required": ["status", "plan", "apply", "switch", "restore", "remove"],
     "restore_backup_option": "--backup <0..9>"
   },
   "backup_policy": {
     "canonical_target_bound": true,
     "location": "sibling .<target-name>.nddev-claude-backups",
+    "pool_marker": "NDDEV-CLAUDE-BACKUPS.json",
+    "slot_marker": "NDDEV-CLAUDE-BACKUP.json",
     "slots": 10
   },
   "transaction_policy": {
-    "staging": "same-directory temporary file",
+    "staging": "unique sibling .<target-name>.nddev-claude-txn-* directory",
+    "lock": "exclusive sibling .<target-name>.nddev-claude-lock directory",
     "managed_file_mode": "0600",
     "new_target_mode": "0700",
+    "target_parent_private_current_user": true,
+    "target_private_current_user": true,
+    "managed_files_no_follow": true,
+    "managed_files_reject_hardlinks": true,
     "preserve_unmanaged_keys": true,
     "reject_symlink_managed_files": true,
+    "reject_dangling_symlinks": true,
+    "reject_non_private_or_non_owned_paths": true,
+    "exact_rollback_bytes_modes_target_existence": true,
+    "fresh_failure_cleanup": true,
     "rollback_on_failure": true,
     "atomic_rename": true
   },
@@ -44,6 +59,7 @@
   "runtime_compatibility": {
     "product": "Claude Code",
     "tested_version_ref": "build/version.json:claude_code_tested",
+    "min_version_ref": "build/version.json:claude_code_min",
     "baseline_ref": "references/claude-baseline.json"
   }
 }

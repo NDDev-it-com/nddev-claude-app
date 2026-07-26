@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """NDDev Claude Code setup manager.
 
-Installs, updates, switches, and removes a selected NDDev marketplace of Claude
-Code plugins in a caller-selected Claude Code home (an explicit ``--target``
-directory, never an inferred ``~/.claude``). The manager owns *only* two keys in
-the target's ``settings.json`` -- its marketplace entry under
-``extraKnownMarketplaces`` and its plugin-enable flags under ``enabledPlugins``
--- plus its own stamp file. Every other settings key, ``.credentials.json``,
-``projects/``, and the Claude-CLI-owned ``plugins/`` registry are preserved
-verbatim. Mutations are atomic (temp + rename), backed up to a target-bound
-slot, and rolled back on failure.
+Registers, updates, switches, and removes a selected NDDev marketplace of
+Claude Code plugins in a caller-selected Claude Code config directory (an
+explicit ``--target`` directory, never an inferred ``~/.claude``). The manager
+owns *only* two keys in the target's ``settings.json`` -- its marketplace entry
+under ``extraKnownMarketplaces`` and its plugin-enable flags under
+``enabledPlugins`` -- plus its own stamp file. Every other settings key,
+``.credentials.json``, ``projects/``, and the Claude-CLI-owned ``plugins/``
+registry are preserved verbatim. Mutations are locked, staged in a unique
+transaction directory, backed up to a target-bound slot, and rolled back on
+failure.
 
 Dependency-free; standard library only; Python >= 3.10.
 """
@@ -17,9 +18,12 @@ Dependency-free; standard library only; Python >= 3.10.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
 import json
 import os
 import shutil
+import stat
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -31,6 +35,9 @@ PRODUCT_NAME = "nddev-claude-app"
 STAMP_NAME = "NDDEV-CLAUDE-SETUP.json"
 STAMP_SCHEMA = 1
 SETTINGS_NAME = "settings.json"
+BACKUP_POOL_MARKER_NAME = "NDDEV-CLAUDE-BACKUPS.json"
+BACKUP_SLOT_MARKER_NAME = "NDDEV-CLAUDE-BACKUP.json"
+BACKUP_SCHEMA = 1
 CATALOG_ROOT = ROOT / "setups"
 MAX_BACKUPS = 10
 OWNER_FILE_MODE = 0o600
@@ -138,27 +145,119 @@ def resolve_target(raw: str) -> Path:
     if any(part in {".", ".."} for part in path.parts):
         fail("--target must not contain dot traversal")
     parent = path.parent
-    if not parent.is_dir() or parent.is_symlink():
+    parent_st = _lstat_optional(parent)
+    if parent_st is None:
         fail(f"--target parent must be an existing real directory: {parent}")
-    if path.is_symlink():
-        fail(f"refusing symlinked target: {path}")
+    _require_directory(parent, parent_st, label="--target parent", private=True)
+    target_st = _lstat_optional(path)
+    if target_st is not None:
+        _require_directory(path, target_st, label="--target", private=True)
     return path
 
 
-def _read_json_file(path: Path, *, max_bytes: int) -> Any:
-    if path.is_symlink():
-        fail(f"refusing symlinked managed file: {path}")
-    if path.stat().st_size > max_bytes:
-        fail(f"managed file exceeds {max_bytes} bytes: {path}")
+def _lstat_optional(path: Path) -> os.stat_result | None:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        return path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        fail(f"cannot inspect {path}: {exc}")
+
+
+def _current_uid() -> int:
+    return os.getuid()
+
+
+def _mode(st: os.stat_result) -> int:
+    return stat.S_IMODE(st.st_mode)
+
+
+def _target_key(target: Path) -> str:
+    return str(target.resolve(strict=False))
+
+
+def _require_current_owner(path: Path, st: os.stat_result) -> None:
+    if st.st_uid != _current_uid():
+        fail(f"refusing path not owned by current user: {path}")
+
+
+def _reject_symlink(path: Path, st: os.stat_result) -> None:
+    if stat.S_ISLNK(st.st_mode):
+        fail(f"refusing symlinked path: {path}")
+
+
+def _require_directory(
+    path: Path,
+    st: os.stat_result,
+    *,
+    label: str = "directory",
+    private: bool,
+) -> None:
+    _reject_symlink(path, st)
+    if not stat.S_ISDIR(st.st_mode):
+        fail(f"{label} must be a real directory: {path}")
+    _require_current_owner(path, st)
+    mode = _mode(st)
+    if private and (mode & 0o077 or (mode & 0o700) != 0o700):
+        fail(f"{label} must be private (0700-compatible): {path}")
+    if not private and mode & 0o022:
+        fail(f"{label} must not be group/world writable: {path}")
+
+
+def _require_regular_managed_file(path: Path, st: os.stat_result) -> None:
+    _reject_symlink(path, st)
+    if not stat.S_ISREG(st.st_mode):
+        fail(f"managed file must be a regular file: {path}")
+    _require_current_owner(path, st)
+    if st.st_nlink != 1:
+        fail(f"refusing hardlinked managed file: {path}")
+    mode = _mode(st)
+    if mode & 0o077 or (mode & 0o600) != 0o600:
+        fail(f"managed file must be private (0600-compatible): {path}")
+
+
+def _read_managed_bytes(path: Path, *, max_bytes: int) -> bytes:
+    st_before = _lstat_optional(path)
+    if st_before is None:
+        fail(f"managed file is missing: {path}")
+    _require_regular_managed_file(path, st_before)
+    if st_before.st_size > max_bytes:
+        fail(f"managed file exceeds {max_bytes} bytes: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        fail(f"cannot open managed file without following links {path}: {exc}")
+    try:
+        st_fd = os.fstat(fd)
+        if st_fd.st_dev != st_before.st_dev or st_fd.st_ino != st_before.st_ino:
+            fail(f"managed file changed during read: {path}")
+        _require_regular_managed_file(path, st_fd)
+        with os.fdopen(fd, "rb") as handle:
+            data = handle.read(max_bytes + 1)
+            fd = -1
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if len(data) > max_bytes:
+        fail(f"managed file exceeds {max_bytes} bytes: {path}")
+    st_after = _lstat_optional(path)
+    if st_after is None or st_after.st_dev != st_before.st_dev or st_after.st_ino != st_before.st_ino:
+        fail(f"managed file changed during read: {path}")
+    return data
+
+
+def _read_json_file(path: Path, *, max_bytes: int) -> Any:
+    data = _read_managed_bytes(path, max_bytes=max_bytes)
+    try:
+        return json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         fail(f"invalid JSON at {path}: {exc}")
 
 
 def read_settings(target: Path) -> dict[str, Any]:
     path = target / SETTINGS_NAME
-    if not path.exists():
+    if _lstat_optional(path) is None:
         return {}
     value = _read_json_file(path, max_bytes=MANAGED_PAYLOAD_MAX_BYTES)
     if not isinstance(value, dict):
@@ -168,7 +267,7 @@ def read_settings(target: Path) -> dict[str, Any]:
 
 def read_stamp(target: Path) -> dict[str, Any] | None:
     path = target / STAMP_NAME
-    if not path.exists():
+    if _lstat_optional(path) is None:
         return None
     value = _read_json_file(path, max_bytes=MANAGED_PAYLOAD_MAX_BYTES)
     if not isinstance(value, dict):
@@ -178,31 +277,47 @@ def read_stamp(target: Path) -> dict[str, Any] | None:
     return value
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    """Write JSON atomically (temp in the same dir + rename), owner-only mode."""
-    directory = path.parent
-    directory.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(directory, OWNER_DIR_MODE)
-    except OSError:
-        pass
-    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(directory))
+def _write_bytes_atomic(path: Path, data: bytes, *, mode: int, transaction_dir: Path) -> None:
+    """Write bytes atomically from a caller-owned transaction directory."""
+    target_dir_st = _lstat_optional(path.parent)
+    if target_dir_st is None:
+        fail(f"managed directory is missing: {path.parent}")
+    _require_directory(path.parent, target_dir_st, label="managed directory", private=True)
+    transaction_st = _lstat_optional(transaction_dir)
+    if transaction_st is None:
+        fail(f"transaction directory is missing: {transaction_dir}")
+    _require_directory(transaction_dir, transaction_st, label="transaction directory", private=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(transaction_dir))
     tmp = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        os.chmod(tmp, OWNER_FILE_MODE)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.chmod(tmp, mode)
         os.replace(tmp, path)
     finally:
-        if tmp.exists():
-            tmp.unlink(missing_ok=True)
+        with contextlib.suppress(FileNotFoundError):
+            tmp_st = tmp.lstat()
+            _reject_symlink(tmp, tmp_st)
+            tmp.unlink()
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any], *, transaction_dir: Path) -> None:
+    """Write JSON atomically (temp in the same dir + rename), owner-only mode."""
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    _write_bytes_atomic(
+        path,
+        text.encode("utf-8"),
+        mode=OWNER_FILE_MODE,
+        transaction_dir=transaction_dir,
+    )
 
 
 def _remove_file(path: Path) -> None:
-    if path.is_symlink():
-        fail(f"refusing to remove symlink: {path}")
-    path.unlink(missing_ok=True)
+    st = _lstat_optional(path)
+    if st is None:
+        return
+    _require_regular_managed_file(path, st)
+    path.unlink()
 
 
 # --- managed-state model (overlay preservation) ----------------------------
@@ -268,51 +383,402 @@ def stamp_payload(setup: Setup) -> dict[str, Any]:
 # --- backups ---------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class ManagedFileSnapshot:
+    exists: bool
+    content: bytes = b""
+    mode: int = OWNER_FILE_MODE
+
+
+@dataclass(frozen=True)
+class TargetSnapshot:
+    exists: bool
+    mode: int = OWNER_DIR_MODE
+
+
+@dataclass(frozen=True)
+class BackupSlot:
+    slot: int
+    marker: dict[str, Any]
+
+
 def backups_dir(target: Path) -> Path:
     return target.parent / f".{target.name}.nddev-claude-backups"
 
 
-def create_backup(target: Path) -> int | None:
+def _backup_pool_payload(target: Path) -> dict[str, Any]:
+    return {
+        "schema_version": BACKUP_SCHEMA,
+        "product_name": PRODUCT_NAME,
+        "canonical_target": _target_key(target),
+    }
+
+
+def _validate_backup_pool(target: Path, root: Path) -> bool:
+    st = _lstat_optional(root)
+    if st is None:
+        return False
+    _require_directory(root, st, label="backup directory", private=True)
+    marker_path = root / BACKUP_POOL_MARKER_NAME
+    marker = _read_json_file(marker_path, max_bytes=MANAGED_PAYLOAD_MAX_BYTES)
+    if marker != _backup_pool_payload(target):
+        fail(f"backup directory is not bound to target: {root}")
+    return True
+
+
+def _ensure_backup_pool(
+    target: Path,
+    *,
+    transaction_dir: Path,
+    created_dirs: list[Path],
+) -> Path:
+    root = backups_dir(target)
+    if _validate_backup_pool(target, root):
+        return root
+    try:
+        os.mkdir(root, OWNER_DIR_MODE)
+    except FileExistsError:
+        fail(f"backup directory exists without nddev ownership marker: {root}")
+    except OSError as exc:
+        fail(f"cannot create backup directory {root}: {exc}")
+    os.chmod(root, OWNER_DIR_MODE)
+    created_dirs.append(root)
+    _atomic_write_json(
+        root / BACKUP_POOL_MARKER_NAME,
+        _backup_pool_payload(target),
+        transaction_dir=transaction_dir,
+    )
+    return root
+
+
+def _file_snapshot(path: Path) -> ManagedFileSnapshot:
+    st = _lstat_optional(path)
+    if st is None:
+        return ManagedFileSnapshot(exists=False)
+    content = _read_managed_bytes(path, max_bytes=MANAGED_PAYLOAD_MAX_BYTES)
+    return ManagedFileSnapshot(exists=True, content=content, mode=_mode(st))
+
+
+def _target_snapshot(target: Path) -> TargetSnapshot:
+    st = _lstat_optional(target)
+    if st is None:
+        return TargetSnapshot(exists=False)
+    _require_directory(target, st, label="--target", private=True)
+    return TargetSnapshot(exists=True, mode=_mode(st))
+
+
+def _snapshot_metadata(snapshot: ManagedFileSnapshot) -> dict[str, Any]:
+    if not snapshot.exists:
+        return {"present": False}
+    return {
+        "present": True,
+        "mode": f"{snapshot.mode:04o}",
+        "sha256": hashlib.sha256(snapshot.content).hexdigest(),
+        "size": len(snapshot.content),
+    }
+
+
+def _write_snapshot(
+    path: Path,
+    snapshot: ManagedFileSnapshot,
+    *,
+    transaction_dir: Path,
+) -> None:
+    if not snapshot.exists:
+        _remove_file(path)
+        return
+    _write_bytes_atomic(
+        path,
+        snapshot.content,
+        mode=snapshot.mode,
+        transaction_dir=transaction_dir,
+    )
+
+
+def _backup_slot_marker(target: Path, snapshots: dict[str, ManagedFileSnapshot]) -> dict[str, Any]:
+    return {
+        "schema_version": BACKUP_SCHEMA,
+        "product_name": PRODUCT_NAME,
+        "canonical_target": _target_key(target),
+        "files": {name: _snapshot_metadata(snapshot) for name, snapshot in snapshots.items()},
+    }
+
+
+def _validate_backup_slot(target: Path, slot_dir: Path) -> BackupSlot | None:
+    st = _lstat_optional(slot_dir)
+    if st is None:
+        return None
+    _require_directory(slot_dir, st, label="backup slot", private=True)
+    marker_path = slot_dir / BACKUP_SLOT_MARKER_NAME
+    if _lstat_optional(marker_path) is None:
+        return None
+    marker = _read_json_file(marker_path, max_bytes=MANAGED_PAYLOAD_MAX_BYTES)
+    if not isinstance(marker, dict):
+        fail(f"backup slot marker must be a JSON object: {marker_path}")
+    if (
+        marker.get("schema_version") != BACKUP_SCHEMA
+        or marker.get("product_name") != PRODUCT_NAME
+        or marker.get("canonical_target") != _target_key(target)
+    ):
+        fail(f"backup slot is not bound to target: {slot_dir}")
+    try:
+        slot = int(slot_dir.name)
+    except ValueError:
+        return None
+    return BackupSlot(slot=slot, marker=marker)
+
+
+def _existing_backup_slots(target: Path, root: Path) -> list[BackupSlot]:
+    slots: list[BackupSlot] = []
+    for child in root.iterdir():
+        if not child.name.isdigit():
+            continue
+        slot = _validate_backup_slot(target, child)
+        if slot is not None:
+            slots.append(slot)
+    return sorted(slots, key=lambda item: item.slot)
+
+
+def _remove_created_dir(path: Path) -> None:
+    st = _lstat_optional(path)
+    if st is None:
+        return
+    _require_directory(path, st, label="created directory", private=True)
+    shutil.rmtree(path)
+
+
+def _remove_backup_slot(target: Path, root: Path, slot: int) -> None:
+    slot_dir = root / str(slot)
+    slot_info = _validate_backup_slot(target, slot_dir)
+    if slot_info is None:
+        fail(f"refusing to remove unmarked backup slot: {slot_dir}")
+    _remove_created_dir(slot_dir)
+
+
+def create_backup(
+    target: Path,
+    *,
+    transaction_dir: Path,
+    created_dirs: list[Path],
+) -> int | None:
     """Snapshot the two managed files into the next backup slot. Returns the slot
     index, or None when there is nothing managed to back up."""
     settings = target / SETTINGS_NAME
     stamp = target / STAMP_NAME
-    if not settings.exists() and not stamp.exists():
+    snapshots = {
+        SETTINGS_NAME: _file_snapshot(settings),
+        STAMP_NAME: _file_snapshot(stamp),
+    }
+    if not any(snapshot.exists for snapshot in snapshots.values()):
         return None
-    root = backups_dir(target)
-    root.mkdir(mode=OWNER_DIR_MODE, parents=True, exist_ok=True)
-    used = sorted(int(p.name) for p in root.iterdir() if p.is_dir() and p.name.isdigit())
-    slot = (used[-1] + 1) if used else 0
+    root = _ensure_backup_pool(target, transaction_dir=transaction_dir, created_dirs=created_dirs)
+    numeric_children = sorted(int(p.name) for p in root.iterdir() if p.name.isdigit())
+    used_slots = _existing_backup_slots(target, root)
+    slot = (numeric_children[-1] + 1) if numeric_children else 0
     slot_dir = root / str(slot)
-    slot_dir.mkdir(mode=OWNER_DIR_MODE)
-    for source in (settings, stamp):
-        if source.exists() and not source.is_symlink():
-            shutil.copy2(source, slot_dir / source.name)
-    # Rotate: keep only the most recent MAX_BACKUPS slots.
-    for old in used[: max(0, len(used) + 1 - MAX_BACKUPS)]:
-        shutil.rmtree(root / str(old), ignore_errors=True)
+    try:
+        os.mkdir(slot_dir, OWNER_DIR_MODE)
+    except FileExistsError:
+        fail(f"backup slot collision: {slot_dir}")
+    except OSError as exc:
+        fail(f"cannot create backup slot {slot_dir}: {exc}")
+    os.chmod(slot_dir, OWNER_DIR_MODE)
+    created_dirs.append(slot_dir)
+    for name, snapshot in snapshots.items():
+        if snapshot.exists:
+            _write_bytes_atomic(
+                slot_dir / name,
+                snapshot.content,
+                mode=snapshot.mode,
+                transaction_dir=transaction_dir,
+            )
+    _atomic_write_json(
+        slot_dir / BACKUP_SLOT_MARKER_NAME,
+        _backup_slot_marker(target, snapshots),
+        transaction_dir=transaction_dir,
+    )
+    keep = {item.slot for item in used_slots[-(MAX_BACKUPS - 1) :]} if MAX_BACKUPS > 1 else set()
+    for old in used_slots:
+        if old.slot not in keep:
+            _remove_backup_slot(target, root, old.slot)
     return slot
 
 
 def restore_backup(target: Path, slot: int) -> None:
-    slot_dir = backups_dir(target) / str(slot)
-    if not slot_dir.is_dir():
-        fail(f"backup slot not found: {slot}")
+    with _target_lock(target):
+        transaction_dir = _create_transaction_dir(target)
+        created_dirs = [transaction_dir]
+        target_snapshot = _target_snapshot(target)
+        settings_snapshot = _file_snapshot(target / SETTINGS_NAME)
+        stamp_snapshot = _file_snapshot(target / STAMP_NAME)
+        try:
+            _ensure_target_for_write(target)
+            root = backups_dir(target)
+            if not _validate_backup_pool(target, root):
+                fail(f"backup slot not found: {slot}")
+            slot_dir = root / str(slot)
+            slot_info = _validate_backup_slot(target, slot_dir)
+            if slot_info is None:
+                fail(f"backup slot not found: {slot}")
+            _restore_backup_slot(target, slot_dir, slot_info.marker, transaction_dir=transaction_dir)
+        except BaseException:
+            _restore_transaction(
+                target,
+                target_snapshot,
+                {
+                    SETTINGS_NAME: settings_snapshot,
+                    STAMP_NAME: stamp_snapshot,
+                },
+                transaction_dir=transaction_dir,
+            )
+            raise
+        finally:
+            for created in sorted(created_dirs, key=lambda p: len(p.parts), reverse=True):
+                _remove_created_dir(created)
+
+
+def _verify_backup_file(
+    slot_dir: Path,
+    name: str,
+    expected: dict[str, Any],
+) -> ManagedFileSnapshot:
+    if expected.get("present") is False:
+        if _lstat_optional(slot_dir / name) is not None:
+            fail(f"backup marker says {name} is absent but file exists")
+        return ManagedFileSnapshot(exists=False)
+    if expected.get("present") is not True:
+        fail(f"backup marker has invalid presence for {name}")
+    mode_text = expected.get("mode")
+    if not isinstance(mode_text, str):
+        fail(f"backup marker missing mode for {name}")
+    try:
+        mode = int(mode_text, 8)
+    except ValueError:
+        fail(f"backup marker has invalid mode for {name}")
+    content = _read_managed_bytes(slot_dir / name, max_bytes=MANAGED_PAYLOAD_MAX_BYTES)
+    digest = hashlib.sha256(content).hexdigest()
+    if digest != expected.get("sha256"):
+        fail(f"backup file digest mismatch for {name}")
+    if len(content) != expected.get("size"):
+        fail(f"backup file size mismatch for {name}")
+    return ManagedFileSnapshot(exists=True, content=content, mode=mode)
+
+
+def _restore_backup_slot(
+    target: Path,
+    slot_dir: Path,
+    marker: dict[str, Any],
+    *,
+    transaction_dir: Path,
+) -> None:
+    files = marker.get("files")
+    if not isinstance(files, dict):
+        fail(f"backup slot marker missing files: {slot_dir}")
     for name in (SETTINGS_NAME, STAMP_NAME):
-        source = slot_dir / name
-        dest = target / name
-        if source.exists():
-            _atomic_write_json(dest, _read_json_file(source, max_bytes=MANAGED_PAYLOAD_MAX_BYTES))
-        else:
-            _remove_file(dest)
+        expected = files.get(name)
+        if not isinstance(expected, dict):
+            fail(f"backup slot marker missing {name}: {slot_dir}")
+        snapshot = _verify_backup_file(slot_dir, name, expected)
+        _write_snapshot(target / name, snapshot, transaction_dir=transaction_dir)
+
+
+def _ensure_target_for_write(target: Path) -> bool:
+    st = _lstat_optional(target)
+    if st is None:
+        try:
+            os.mkdir(target, OWNER_DIR_MODE)
+        except FileExistsError:
+            st = _lstat_optional(target)
+            if st is None:
+                fail(f"target appeared but cannot be inspected: {target}")
+            _require_directory(target, st, label="--target", private=True)
+            return False
+        except OSError as exc:
+            fail(f"cannot create target {target}: {exc}")
+        os.chmod(target, OWNER_DIR_MODE)
+        st = _lstat_optional(target)
+        if st is None:
+            fail(f"created target disappeared: {target}")
+        _require_directory(target, st, label="--target", private=True)
+        return True
+    _require_directory(target, st, label="--target", private=True)
+    return False
+
+
+def _create_transaction_dir(target: Path) -> Path:
+    parent_st = _lstat_optional(target.parent)
+    if parent_st is None:
+        fail(f"--target parent must be an existing real directory: {target.parent}")
+    _require_directory(target.parent, parent_st, label="--target parent", private=True)
+    try:
+        name = tempfile.mkdtemp(prefix=f".{target.name}.nddev-claude-txn-", dir=str(target.parent))
+    except OSError as exc:
+        fail(f"cannot create transaction directory in {target.parent}: {exc}")
+    path = Path(name)
+    os.chmod(path, OWNER_DIR_MODE)
+    st = _lstat_optional(path)
+    if st is None:
+        fail(f"transaction directory disappeared: {path}")
+    _require_directory(path, st, label="transaction directory", private=True)
+    return path
+
+
+@contextlib.contextmanager
+def _target_lock(target: Path):
+    parent_st = _lstat_optional(target.parent)
+    if parent_st is None:
+        fail(f"--target parent must be an existing real directory: {target.parent}")
+    _require_directory(target.parent, parent_st, label="--target parent", private=True)
+    lock_dir = target.parent / f".{target.name}.nddev-claude-lock"
+    created = False
+    try:
+        try:
+            os.mkdir(lock_dir, OWNER_DIR_MODE)
+        except FileExistsError:
+            fail(f"target is locked by another nddev-claude-app transaction: {lock_dir}")
+        except OSError as exc:
+            fail(f"cannot create target lock {lock_dir}: {exc}")
+        created = True
+        os.chmod(lock_dir, OWNER_DIR_MODE)
+        marker = lock_dir / "owner.json"
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, OWNER_FILE_MODE)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"product_name": PRODUCT_NAME, "pid": os.getpid()}, handle, sort_keys=True)
+            handle.write("\n")
+        yield
+    finally:
+        if created:
+            _remove_created_dir(lock_dir)
+
+
+def _restore_transaction(
+    target: Path,
+    target_snapshot: TargetSnapshot,
+    file_snapshots: dict[str, ManagedFileSnapshot],
+    *,
+    transaction_dir: Path,
+) -> None:
+    if target_snapshot.exists:
+        _ensure_target_for_write(target)
+        for name, snapshot in file_snapshots.items():
+            _write_snapshot(target / name, snapshot, transaction_dir=transaction_dir)
+        with contextlib.suppress(OSError):
+            os.chmod(target, target_snapshot.mode)
+    else:
+        for name in (SETTINGS_NAME, STAMP_NAME):
+            _remove_file(target / name)
+        with contextlib.suppress(OSError):
+            target.rmdir()
 
 
 # --- inspection ------------------------------------------------------------
 
 
 def inspect_target(target: Path) -> dict[str, Any]:
-    if not target.exists():
+    target_st = _lstat_optional(target)
+    if target_st is None:
         return {"state": "missing", "setup_id": None, "drift": []}
+    _require_directory(target, target_st, label="--target", private=True)
     stamp = read_stamp(target)
     if stamp is None:
         return {"state": "unmanaged", "setup_id": None, "drift": []}
@@ -331,30 +797,52 @@ def inspect_target(target: Path) -> dict[str, Any]:
 # --- transactional operations ----------------------------------------------
 
 
-def _commit(target: Path, new_settings: dict[str, Any], setup: Setup | None) -> int | None:
+def _commit_locked(target: Path, new_settings: dict[str, Any], setup: Setup | None) -> int | None:
     """Atomically write settings + stamp with a fresh backup and rollback."""
-    slot = create_backup(target)
+    transaction_dir = _create_transaction_dir(target)
+    transaction_dirs = [transaction_dir]
+    backup_created_dirs: list[Path] = []
     settings_path = target / SETTINGS_NAME
     stamp_path = target / STAMP_NAME
-    before_settings = settings_path.read_bytes() if settings_path.exists() else None
-    before_stamp = stamp_path.read_bytes() if stamp_path.exists() else None
+    target_snapshot = _target_snapshot(target)
+    before_settings = _file_snapshot(settings_path)
+    before_stamp = _file_snapshot(stamp_path)
+    created_target = False
     try:
-        _atomic_write_json(settings_path, new_settings)
+        created_target = _ensure_target_for_write(target)
+        slot = create_backup(
+            target,
+            transaction_dir=transaction_dir,
+            created_dirs=backup_created_dirs,
+        )
+        _atomic_write_json(settings_path, new_settings, transaction_dir=transaction_dir)
         if setup is None:
             _remove_file(stamp_path)
         else:
-            _atomic_write_json(stamp_path, stamp_payload(setup))
+            _atomic_write_json(
+                stamp_path,
+                stamp_payload(setup),
+                transaction_dir=transaction_dir,
+            )
     except BaseException:
-        # Roll back to exact prior bytes.
-        if before_settings is None:
-            _remove_file(settings_path)
-        else:
-            settings_path.write_bytes(before_settings)
-        if before_stamp is None:
-            _remove_file(stamp_path)
-        else:
-            stamp_path.write_bytes(before_stamp)
+        _restore_transaction(
+            target,
+            target_snapshot,
+            {
+                SETTINGS_NAME: before_settings,
+                STAMP_NAME: before_stamp,
+            },
+            transaction_dir=transaction_dir,
+        )
+        for created in sorted(backup_created_dirs, key=lambda p: len(p.parts), reverse=True):
+            _remove_created_dir(created)
+        if created_target and not target_snapshot.exists:
+            with contextlib.suppress(OSError):
+                target.rmdir()
         raise
+    finally:
+        for created in sorted(transaction_dirs, key=lambda p: len(p.parts), reverse=True):
+            _remove_created_dir(created)
     return slot
 
 
@@ -384,22 +872,23 @@ def plan(target: Path, setup: Setup) -> dict[str, Any]:
 
 
 def apply_setup(target: Path, setup: Setup, *, command: str) -> dict[str, Any]:
-    prior = inspect_target(target)
-    if command == "switch" and prior["state"] != "managed":
-        fail("switch requires a target already managed by nddev-claude-app")
-    if command == "switch" and prior["setup_id"] == setup.setup_id:
-        fail("switch requires a different setup; use apply to update in place")
-    settings = read_settings(target)
-    # If switching from a prior managed setup, strip its keys first so a renamed
-    # marketplace/plugin does not leave an orphaned enable flag.
-    if prior["state"] == "managed" and prior["setup_id"] not in (None, setup.setup_id):
-        try:
-            old = load_setup(str(prior["setup_id"]))
-            settings = strip_managed(settings, old.marketplace_name, list(old.enable_keys))
-        except ManagerError:
-            pass
-    composed = compose_settings(settings, setup)
-    slot = _commit(target, composed, setup)
+    with _target_lock(target):
+        prior = inspect_target(target)
+        if command == "switch" and prior["state"] != "managed":
+            fail("switch requires a target already managed by nddev-claude-app")
+        if command == "switch" and prior["setup_id"] == setup.setup_id:
+            fail("switch requires a different setup; use apply to update in place")
+        settings = read_settings(target)
+        # If switching from a prior managed setup, strip its keys first so a renamed
+        # marketplace/plugin does not leave an orphaned enable flag.
+        if prior["state"] == "managed" and prior["setup_id"] not in (None, setup.setup_id):
+            try:
+                old = load_setup(str(prior["setup_id"]))
+                settings = strip_managed(settings, old.marketplace_name, list(old.enable_keys))
+            except ManagerError:
+                pass
+        composed = compose_settings(settings, setup)
+        slot = _commit_locked(target, composed, setup)
     return {
         "command": command,
         "target": str(target),
@@ -410,21 +899,22 @@ def apply_setup(target: Path, setup: Setup, *, command: str) -> dict[str, Any]:
 
 
 def remove_setup(target: Path) -> dict[str, Any]:
-    status = inspect_target(target)
-    if status["state"] != "managed":
-        fail("target is not managed by nddev-claude-app")
-    settings = read_settings(target)
-    try:
-        setup = load_setup(str(status["setup_id"]))
-        settings = strip_managed(settings, setup.marketplace_name, list(setup.enable_keys))
-    except ManagerError:
-        stamp = read_stamp(target) or {}
-        settings = strip_managed(
-            settings,
-            str(stamp.get("marketplace_name", "")),
-            list(stamp.get("enabled_plugins", []) or []),
-        )
-    slot = _commit(target, settings, None)
+    with _target_lock(target):
+        status = inspect_target(target)
+        if status["state"] != "managed":
+            fail("target is not managed by nddev-claude-app")
+        settings = read_settings(target)
+        try:
+            setup = load_setup(str(status["setup_id"]))
+            settings = strip_managed(settings, setup.marketplace_name, list(setup.enable_keys))
+        except ManagerError:
+            stamp = read_stamp(target) or {}
+            settings = strip_managed(
+                settings,
+                str(stamp.get("marketplace_name", "")),
+                list(stamp.get("enabled_plugins", []) or []),
+            )
+        slot = _commit_locked(target, settings, None)
     return {
         "command": "remove",
         "target": str(target),

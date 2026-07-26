@@ -5,7 +5,8 @@ description: Validate a native Claude Code plugin — manifest shape, component 
 
 # Claude Plugin Checker
 
-Statically validate a plugin, then confirm it loads.
+Statically validate a plugin. Confirm it loads only when a real Claude Code CLI
+test environment is intentionally available.
 
 ## Checks
 
@@ -13,13 +14,19 @@ Statically validate a plugin, then confirm it loads.
    unchanged from prior releases; known fields have correct types; no
    unrecognized required fields.
 2. Declared component paths resolve; default dirs (`skills/`, `agents/`,
-   `hooks/hooks.json`, `.mcp.json`) are discovered where present.
+   `hooks/hooks.json`, `.mcp.json`, `.lsp.json`, `monitors/`, `themes/`) are
+   discovered where present.
 3. `${CLAUDE_PLUGIN_ROOT}` (not a hard-coded path) is used for bundled scripts.
-4. No credentials, live tokens, or placeholders in tracked files.
-5. Marketplace entry (if any) has a valid `source` and unique `name`.
+4. Plugin-shipped agents do not declare unsupported `hooks`, `mcpServers`, or
+   `permissionMode` fields.
+5. `userConfig`, `channels`, `dependencies`, and `defaultEnabled` match the
+   current Claude Code manifest schema when present.
+6. No credentials, live tokens, or unfinished filler text in tracked files.
+7. Marketplace entry (if any) has a valid `source`, unique `name`, and optional
+   metadata that matches the plugin manifest.
 
 ## Result
 
-Run `claude plugin validate . --strict` as the authoritative gate. Return PASS
-only when the static checks and that validation both succeed; otherwise FAIL
-with the exact artifact, field, and reproduction.
+Return PASS for offline audits only when static checks pass. If `claude plugin
+validate . --strict` is part of the requested environment, report its result
+separately with the exact artifact, field, and reproduction for any failure.

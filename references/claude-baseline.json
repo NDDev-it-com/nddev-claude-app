@@ -10,39 +10,10 @@
     "https://code.claude.com/docs/en/plugin-marketplaces",
     "https://code.claude.com/docs/en/plugins-reference",
     "https://github.com/anthropics/claude-code/blob/main/.claude-plugin/marketplace.json",
-    "https://registry.npmjs.org/@anthropic-ai/claude-code",
     "https://downloads.claude.ai/claude-code-releases/latest",
-    "https://downloads.claude.ai/claude-code-releases/2.1.220/manifest.json",
-    "https://claude.ai/install.sh",
-    "https://claude.ai/install.ps1"
+    "https://downloads.claude.ai/claude-code-releases/2.1.220/manifest.json"
   ],
   "distribution": {
-    "npm_package": "@anthropic-ai/claude-code",
-    "dist_tags": {
-      "latest": "2.1.220",
-      "next": "2.1.220",
-      "stable": "2.1.212"
-    },
-    "latest_tarball": {
-      "version": "2.1.220",
-      "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.220.tgz",
-      "integrity": "sha512-ogBrvwkqF9f8okmnXKxmRNHuvtFxFEffe5pWdqOV3iQDxlUOKirFqnyWC7NGXXnDA4WkkbPH8pvSbwyCR2Auyw==",
-      "shasum": "29e7249f01f9602b78c2d5f3c2f1c8a11b2ebcb4",
-      "unpacked_size": 165478,
-      "bin": {
-        "claude": "bin/claude.exe"
-      },
-      "optional_dependencies": {
-        "@anthropic-ai/claude-code-darwin-arm64": "2.1.220",
-        "@anthropic-ai/claude-code-darwin-x64": "2.1.220",
-        "@anthropic-ai/claude-code-linux-arm64": "2.1.220",
-        "@anthropic-ai/claude-code-linux-arm64-musl": "2.1.220",
-        "@anthropic-ai/claude-code-linux-x64": "2.1.220",
-        "@anthropic-ai/claude-code-linux-x64-musl": "2.1.220",
-        "@anthropic-ai/claude-code-win32-arm64": "2.1.220",
-        "@anthropic-ai/claude-code-win32-x64": "2.1.220"
-      }
-    },
     "native_release_manifest": {
       "version": "2.1.220",
       "buildDate": "2026-07-24T22:28:51Z",
@@ -89,13 +60,6 @@
           "size": 265720480
         }
       }
-    },
-    "installer_audit": {
-      "managed_by_this_module": false,
-      "read_only_verified": true,
-      "install_sh_sha256": "cde4f1702d3b1695f92b73d26888364e17bca476e17f0fd676484c951d36c125",
-      "install_ps1_sha256": "cd17c6b555f761d60373659824bf805e1510538226e4c7028e19d7494937a333",
-      "limitation": "Official native installers download under the caller HOME and then run the downloaded Claude binary install command; nddev-claude-app does not install, update, launch, or repair system Claude Code binaries."
     }
   },
   "config_dir": "~/.claude",

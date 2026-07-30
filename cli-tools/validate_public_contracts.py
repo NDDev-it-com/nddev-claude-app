@@ -231,20 +231,6 @@ def main() -> int:
             errors.append("references/claude-baseline.json: verified_against must be Claude Code 2.1.220")
         if baseline.get("config_dir_env") != "CLAUDE_CONFIG_DIR":
             errors.append("references/claude-baseline.json: config_dir_env must be CLAUDE_CONFIG_DIR")
-        distribution = baseline.get("distribution", {})
-        dist_tags = distribution.get("dist_tags", {})
-        if dist_tags.get("latest") != "2.1.220" or dist_tags.get("next") != "2.1.220":
-            errors.append("references/claude-baseline.json: latest/next dist-tags must be 2.1.220")
-        if dist_tags.get("stable") != "2.1.212":
-            errors.append("references/claude-baseline.json: stable dist-tag must be 2.1.212")
-        installer_audit = distribution.get("installer_audit", {})
-        require_bool(
-            installer_audit,
-            "managed_by_this_module",
-            False,
-            "distribution.installer_audit",
-            errors,
-        )
         surfaces = set(baseline.get("native_plugin_surfaces", []))
         for surface in (
             "skills",

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "nddev-claude-app",
-  "build_version": "0.1.0",
+  "build_version": "0.1.1",
   "entrypoint": "python3 cli-tools/nddev_claude.py",
   "source_root": "setups",
   "setup_ids": ["stable", "edge"],

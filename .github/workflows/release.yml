@@ -21,9 +21,9 @@ jobs:
       version: ${{ github.ref_name }}
       package_name: nddev-claude-app
       archive_paths: >-
-        README.md LICENSE VERSION CHANGELOG.md SECURITY.md .gitignore .claude
+        AGENTS.md README.md LICENSE VERSION CHANGELOG.md SECURITY.md .gitignore .claude
         .gds .github build cli-tools config plugins references setups
         .claude-plugin
       runtime_paths: >-
-        README.md LICENSE VERSION build cli-tools config plugins references
-        setups .claude-plugin
+        AGENTS.md .claude README.md LICENSE VERSION build cli-tools config
+        plugins references setups .claude-plugin

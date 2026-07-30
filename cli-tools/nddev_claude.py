@@ -242,7 +242,11 @@ def _read_managed_bytes(path: Path, *, max_bytes: int) -> bytes:
     if len(data) > max_bytes:
         fail(f"managed file exceeds {max_bytes} bytes: {path}")
     st_after = _lstat_optional(path)
-    if st_after is None or st_after.st_dev != st_before.st_dev or st_after.st_ino != st_before.st_ino:
+    if (
+        st_after is None
+        or st_after.st_dev != st_before.st_dev
+        or st_after.st_ino != st_before.st_ino
+    ):
         fail(f"managed file changed during read: {path}")
     return data
 
@@ -620,7 +624,9 @@ def restore_backup(target: Path, slot: int) -> None:
             slot_info = _validate_backup_slot(target, slot_dir)
             if slot_info is None:
                 fail(f"backup slot not found: {slot}")
-            _restore_backup_slot(target, slot_dir, slot_info.marker, transaction_dir=transaction_dir)
+            _restore_backup_slot(
+                target, slot_dir, slot_info.marker, transaction_dir=transaction_dir
+            )
         except BaseException:
             _restore_transaction(
                 target,

@@ -9,5 +9,5 @@ All notable changes to `nddev-claude-app` are documented here.
 - Hardened the setup manager against symlink, dangling symlink, hardlink,
   ownership, permission, lock collision, backup collision, and rollback edge
   cases while preserving explicit `CLAUDE_CONFIG_DIR` target behavior.
-- Verified the public contract against Claude Code 2.1.220, the current native
-  plugin marketplace/settings surfaces, and official release manifest metadata.
+- Bound the public contract to Claude Code 2.1.220 and its native plugin
+  marketplace/settings surfaces.

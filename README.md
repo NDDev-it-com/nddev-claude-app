@@ -11,8 +11,8 @@ state untouched.
 The repository also publishes the independently installable `nddev-builder`
 Claude Code marketplace/plugin.
 
-> Status: **0.1.0, unreleased**. The public contract is verified against Claude
-> Code `2.1.220` and the native plugin format current on 2026-07-26.
+> Status: **0.1.0, unreleased**. The public contract targets Claude Code
+> `2.1.220` and its native plugin format.
 
 ## Lifecycle (target-explicit)
 

@@ -33,6 +33,37 @@ REQUIRED_FILES = (
     "setups/edge/setup.json",
 )
 
+PUBLIC_BASELINE_KEYS = {
+    "schema_version",
+    "product",
+    "verified_against",
+    "official_sources",
+    "config_dir",
+    "config_dir_env",
+    "settings_file",
+    "managed_settings_keys",
+    "cli_owned",
+    "never_touch",
+    "settings_surface",
+    "native_plugin_surfaces",
+    "plugin_manifest",
+    "marketplace_manifest",
+    "plugin_manifest_required",
+    "marketplace_manifest_required",
+}
+PRIVATE_OBSERVATION_KEYS = {
+    "verified_at",
+    "distribution",
+    "native_release_manifest",
+    "buildDate",
+    "commit",
+    "platforms",
+    "binary",
+    "checksum",
+    "size",
+}
+
+
 def is_real_file(path: Path) -> bool:
     try:
         return stat.S_ISREG(path.lstat().st_mode)
@@ -75,14 +106,30 @@ def resolve_version_ref(ref: str, version: dict, errors: list[str]) -> str | Non
     return value
 
 
-def require_bool(container: dict, key: str, expected: bool, context: str, errors: list[str]) -> None:
+def require_bool(
+    container: dict, key: str, expected: bool, context: str, errors: list[str]
+) -> None:
     if container.get(key) is not expected:
         errors.append(f"{context}: {key} must be {expected}")
 
 
-def require_string(container: dict, key: str, expected: str, context: str, errors: list[str]) -> None:
+def require_string(
+    container: dict, key: str, expected: str, context: str, errors: list[str]
+) -> None:
     if container.get(key) != expected:
         errors.append(f"{context}: {key} must be {expected!r}")
+
+
+def find_keys(value: object, forbidden: set[str]) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, dict):
+        found.update(set(value) & forbidden)
+        for child in value.values():
+            found.update(find_keys(child, forbidden))
+    elif isinstance(value, list):
+        for child in value:
+            found.update(find_keys(child, forbidden))
+    return found
 
 
 def validate_manager_source(errors: list[str]) -> None:
@@ -207,7 +254,10 @@ def main() -> int:
 
     marketplace = load_json(".claude-plugin/marketplace.json", errors)
     if marketplace is not None:
-        if marketplace.get("$schema") != "https://json.schemastore.org/claude-code-marketplace.json":
+        if (
+            marketplace.get("$schema")
+            != "https://json.schemastore.org/claude-code-marketplace.json"
+        ):
             errors.append(".claude-plugin/marketplace.json schema URL is required")
         if marketplace.get("name") != "nddev-builder":
             errors.append(".claude-plugin/marketplace.json name must be nddev-builder")
@@ -227,10 +277,25 @@ def main() -> int:
                     errors.append("marketplace plugin entry version must be 0.1.0")
 
     if baseline is not None:
+        if set(baseline) != PUBLIC_BASELINE_KEYS:
+            errors.append(
+                "references/claude-baseline.json: public baseline keys differ: "
+                f"actual={sorted(baseline)}, expected={sorted(PUBLIC_BASELINE_KEYS)}"
+            )
+        private_observations = find_keys(baseline, PRIVATE_OBSERVATION_KEYS)
+        if private_observations:
+            errors.append(
+                "references/claude-baseline.json: private distribution observation keys "
+                f"are forbidden: {sorted(private_observations)}"
+            )
         if baseline.get("verified_against") != "Claude Code 2.1.220":
-            errors.append("references/claude-baseline.json: verified_against must be Claude Code 2.1.220")
+            errors.append(
+                "references/claude-baseline.json: verified_against must be Claude Code 2.1.220"
+            )
         if baseline.get("config_dir_env") != "CLAUDE_CONFIG_DIR":
-            errors.append("references/claude-baseline.json: config_dir_env must be CLAUDE_CONFIG_DIR")
+            errors.append(
+                "references/claude-baseline.json: config_dir_env must be CLAUDE_CONFIG_DIR"
+            )
         surfaces = set(baseline.get("native_plugin_surfaces", []))
         for surface in (
             "skills",

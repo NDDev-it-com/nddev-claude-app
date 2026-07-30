@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 import sys
 from pathlib import Path
 
@@ -32,10 +33,23 @@ REQUIRED_FILES = (
     "setups/edge/setup.json",
 )
 
+def is_real_file(path: Path) -> bool:
+    try:
+        return stat.S_ISREG(path.lstat().st_mode)
+    except FileNotFoundError:
+        return False
+
+
+def is_real_directory(path: Path) -> bool:
+    try:
+        return stat.S_ISDIR(path.lstat().st_mode)
+    except FileNotFoundError:
+        return False
+
 
 def load_json(relative: str, errors: list[str]) -> dict | None:
     path = ROOT / relative
-    if not path.is_file():
+    if not is_real_file(path):
         errors.append(f"missing required contract file: {relative}")
         return None
     try:
@@ -103,8 +117,17 @@ def main() -> int:
     errors: list[str] = []
 
     for relative in REQUIRED_FILES:
-        if not (ROOT / relative).exists():
+        if not is_real_file(ROOT / relative):
             errors.append(f"missing required public file: {relative}")
+
+    for relative in ("AGENTS.md", ".claude/CLAUDE.md"):
+        if not is_real_file(ROOT / relative):
+            errors.append(f"required instruction path is not a regular file: {relative}")
+    claude_dir = ROOT / ".claude"
+    if not is_real_directory(claude_dir):
+        errors.append("required instruction path is not a real directory: .claude")
+    elif {path.name for path in claude_dir.iterdir()} != {"CLAUDE.md"}:
+        errors.append(".claude contains unexpected entries")
 
     contract = load_json("config/nddev-contract.json", errors)
     manifest = load_json("build/manifest.json", errors)

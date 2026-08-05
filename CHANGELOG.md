@@ -2,6 +2,13 @@
 
 All notable changes to `nddev-claude-app` are documented here.
 
+## [0.1.2] - 2026-08-05
+
+- Revalidate the native marketplace, plugin, hook, skill, agent, and settings
+  contracts against stable Claude Code 2.1.222.
+- Preserve target-explicit setup behavior; Claude Code itself remains a host
+  runtime and is never installed into live user state by this manager.
+
 ## [0.1.1] - 2026-07-30
 
 - Included the repository instruction closure in both source and runtime

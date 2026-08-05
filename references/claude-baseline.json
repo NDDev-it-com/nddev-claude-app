@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "product": "Claude Code",
-  "verified_against": "Claude Code 2.1.220",
+  "verified_against": "Claude Code 2.1.222",
   "official_sources": [
     "https://code.claude.com/docs/en/setup",
     "https://code.claude.com/docs/en/env-vars",

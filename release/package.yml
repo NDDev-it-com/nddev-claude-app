@@ -1,0 +1,9 @@
+schema_version: 1
+package_name: nddev-claude-app
+version_source: VERSION
+archive_paths: >-
+  AGENTS.md README.md LICENSE VERSION CHANGELOG.md SECURITY.md .gitignore .claude .gds .github
+  build cli-tools config plugins references setups .claude-plugin release
+runtime_paths: >-
+  AGENTS.md .claude README.md LICENSE VERSION build cli-tools config plugins references setups
+  .claude-plugin

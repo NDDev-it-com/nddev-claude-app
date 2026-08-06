@@ -2,6 +2,13 @@
 
 All notable changes to `nddev-claude-app` are documented here.
 
+## [0.1.3] - 2026-08-06
+
+- Revalidate the native marketplace, plugin, hook, skill, agent, and settings
+  contracts against stable Claude Code 2.1.223.
+- Retain explicit isolated targets while advancing to the upstream release
+  containing permission-prompt, workflow-sandbox, and bypass-policy fixes.
+
 ## [0.1.2] - 2026-08-05
 
 - Revalidate the native marketplace, plugin, hook, skill, agent, and settings

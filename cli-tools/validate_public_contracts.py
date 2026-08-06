@@ -219,8 +219,8 @@ def main() -> int:
     if manifest is not None and version is not None:
         if manifest.get("build_version") != version.get("build_version"):
             errors.append("build_version mismatch between manifest.json and version.json")
-        if version.get("claude_code_tested") != "2.1.222":
-            errors.append("build/version.json: claude_code_tested must be 2.1.222")
+        if version.get("claude_code_tested") != "2.1.223":
+            errors.append("build/version.json: claude_code_tested must be 2.1.223")
         if version.get("claude_code_min") != "2.1.154":
             errors.append("build/version.json: claude_code_min must be 2.1.154")
         command_policy = manifest.get("command_policy", {})
@@ -294,9 +294,9 @@ def main() -> int:
                 "references/claude-baseline.json: private distribution observation keys "
                 f"are forbidden: {sorted(private_observations)}"
             )
-        if baseline.get("verified_against") != "Claude Code 2.1.222":
+        if baseline.get("verified_against") != "Claude Code 2.1.223":
             errors.append(
-                "references/claude-baseline.json: verified_against must be Claude Code 2.1.222"
+                "references/claude-baseline.json: verified_against must be Claude Code 2.1.223"
             )
         if baseline.get("config_dir_env") != "CLAUDE_CONFIG_DIR":
             errors.append(

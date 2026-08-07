@@ -2,6 +2,12 @@
 
 All notable changes to `nddev-claude-app` are documented here.
 
+## [0.1.5] - 2026-08-08
+
+- Represent native plugin source kinds as explicit typed records so the
+  `url` source kind cannot be confused with a captured runtime URL fact.
+- Validate the complete Claude Code 2.1.224 source-kind set and record shape.
+
 ## [0.1.4] - 2026-08-08
 
 - Revalidate the native marketplace, plugin, hook, skill, agent, settings, and

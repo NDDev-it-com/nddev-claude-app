@@ -23,6 +23,10 @@ Create the smallest valid plugin that owns the requested behavior.
    `dependencies`, and `defaultEnabled`.
 5. Validate offline with the checker, then run `claude plugin validate . --strict`
    only in an intentional Claude Code test environment.
+6. When a marketplace must distribute a zip without git or npm, use the native
+   Claude Code 2.1.224+ `archive` source with an HTTPS `url` and preferably an
+   exact `sha256`. Do not use it for organization-managed plugin sync, which
+   does not support archive or npm sources.
 
 ## Rules
 

@@ -15,7 +15,8 @@ the current format (`code.claude.com/docs`). Each family ships a conservative
   dirs at plugin root: `skills/`, `commands/`, `agents/`, `hooks/hooks.json`,
   `.mcp.json`, `.lsp.json`, `monitors/`, and `themes/`.
 - **Marketplace** — repo-root `.claude-plugin/marketplace.json` (`name`,
-  `owner`, `plugins[]`).
+  `owner`, `plugins[]`); plugin sources include relative, git-backed, npm, and
+  Claude Code 2.1.224+ HTTPS `archive` objects with optional `sha256`.
 - **Skill** — `skills/<name>/SKILL.md`; only `description` recommended; body
   loads on invoke (progressive disclosure).
 - **Command** — a skill as a flat `commands/*.md`; namespaced `/<plugin>:<name>`.
@@ -34,3 +35,5 @@ the current format (`code.claude.com/docs`). Each family ships a conservative
   for UI, `renames` for migrations.
 - Gate every artifact on `claude plugin validate . --strict` when a real Claude
   Code CLI is intentionally available; static checks are the offline gate.
+- Treat marketplace distribution and organization-managed sync as distinct:
+  the latter does not accept npm or archive plugin sources.

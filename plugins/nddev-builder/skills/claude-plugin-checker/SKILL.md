@@ -23,7 +23,10 @@ test environment is intentionally available.
    current Claude Code manifest schema when present.
 6. No credentials, live tokens, or unfinished filler text in tracked files.
 7. Marketplace entry (if any) has a valid `source`, unique `name`, and optional
-   metadata that matches the plugin manifest.
+   metadata that matches the plugin manifest. For an `archive` source, require
+   HTTPS, validate `sha256` as 64 lowercase hexadecimal characters when
+   present, and report that organization-managed plugin sync does not support
+   archive sources.
 
 ## Result
 

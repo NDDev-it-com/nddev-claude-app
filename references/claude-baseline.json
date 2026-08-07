@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "product": "Claude Code",
-  "verified_against": "Claude Code 2.1.223",
+  "verified_against": "Claude Code 2.1.224",
   "official_sources": [
     "https://code.claude.com/docs/en/setup",
     "https://code.claude.com/docs/en/env-vars",
@@ -48,6 +48,14 @@
     "dependencies",
     "defaultEnabled"
   ],
+  "plugin_source_types": {
+    "relative": "./path within the marketplace repository",
+    "github": "repo with optional ref and sha",
+    "url": "git URL with optional ref and sha",
+    "git-subdir": "git URL and path with optional ref and sha",
+    "npm": "package with optional version and registry",
+    "archive": "Claude Code 2.1.224+ HTTPS zip with optional sha256; unsupported by organization-managed plugin sync"
+  },
   "plugin_manifest": ".claude-plugin/plugin.json",
   "marketplace_manifest": ".claude-plugin/marketplace.json",
   "plugin_manifest_required": [

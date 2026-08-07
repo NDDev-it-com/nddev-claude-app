@@ -319,6 +319,31 @@ def main() -> int:
         ):
             if surface not in surfaces:
                 errors.append(f"references/claude-baseline.json missing native surface: {surface}")
+        source_types = baseline.get("plugin_source_types")
+        if not isinstance(source_types, list) or any(
+            not isinstance(entry, dict)
+            or set(entry) != {"type", "description"}
+            or not isinstance(entry.get("type"), str)
+            or not isinstance(entry.get("description"), str)
+            or not entry["description"]
+            for entry in source_types
+        ):
+            errors.append(
+                "references/claude-baseline.json: plugin_source_types must be "
+                "non-empty {type, description} records"
+            )
+        elif {entry["type"] for entry in source_types} != {
+            "relative",
+            "github",
+            "url",
+            "git-subdir",
+            "npm",
+            "archive",
+        }:
+            errors.append(
+                "references/claude-baseline.json: plugin_source_types must preserve "
+                "the exact supported native source type set"
+            )
 
     if errors:
         for error in errors:

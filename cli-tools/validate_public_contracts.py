@@ -220,6 +220,12 @@ def main() -> int:
     if manifest is not None and version is not None:
         if manifest.get("build_version") != version.get("build_version"):
             errors.append("build_version mismatch between manifest.json and version.json")
+        build_version = version.get("build_version")
+        if (ROOT / "VERSION").read_text(encoding="utf-8").strip() != build_version:
+            errors.append("VERSION must match build/version.json:build_version")
+        expected_status = f"> Status: **{build_version}, unreleased**."
+        if expected_status not in (ROOT / "README.md").read_text(encoding="utf-8"):
+            errors.append("README.md status must match build/version.json:build_version")
         if version.get("claude_code_tested") != "2.1.226":
             errors.append("build/version.json: claude_code_tested must be 2.1.226")
         if version.get("claude_code_min") != "2.1.154":

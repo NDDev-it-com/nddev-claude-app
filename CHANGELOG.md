@@ -9,6 +9,8 @@ All notable changes to `nddev-claude-app` are documented here.
 - Preserve the target-explicit, non-credential-owning setup boundary across
   the 2.1.225 headless-auth and workspace-trust fixes and the 2.1.226
   reliability release; no native plugin-format change was observed.
+- Bind the public status banner and `VERSION` file to the canonical build
+  version so future runtime promotions cannot leave stale release metadata.
 
 ## [0.1.5] - 2026-08-08
 

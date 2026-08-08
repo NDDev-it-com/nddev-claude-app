@@ -2,6 +2,14 @@
 
 All notable changes to `nddev-claude-app` are documented here.
 
+## [0.1.6] - 2026-08-08
+
+- Revalidate the native marketplace, plugin, hook, skill, agent, settings, and
+  archive-source contracts against stable Claude Code 2.1.226.
+- Preserve the target-explicit, non-credential-owning setup boundary across
+  the 2.1.225 headless-auth and workspace-trust fixes and the 2.1.226
+  reliability release; no native plugin-format change was observed.
+
 ## [0.1.5] - 2026-08-08
 
 - Represent native plugin source kinds as explicit typed records so the

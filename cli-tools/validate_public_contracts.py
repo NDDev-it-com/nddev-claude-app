@@ -27,6 +27,7 @@ REQUIRED_FILES = (
     "build/manifest.json",
     "build/version.json",
     "cli-tools/nddev_claude.py",
+    "cli-tools/provider_protocol_v3.py",
     ".claude-plugin/marketplace.json",
     "plugins/nddev-builder/.claude-plugin/plugin.json",
     "setups/stable/setup.json",
@@ -140,7 +141,11 @@ def find_keys(value: object, forbidden: set[str]) -> set[str]:
 
 
 def validate_manager_source(errors: list[str]) -> None:
-    source = (ROOT / "cli-tools/nddev_claude.py").read_text(encoding="utf-8")
+    manager_path = ROOT / "cli-tools/nddev_claude.py"
+    source = manager_path.read_text(encoding="utf-8")
+    provider_source = (ROOT / "cli-tools/provider_protocol_v3.py").read_text(encoding="utf-8")
+    if not manager_path.lstat().st_mode & stat.S_IXUSR:
+        errors.append("cli-tools/nddev_claude.py must be an executable provider entrypoint")
     forbidden = (
         "subprocess",
         "os.system",
@@ -165,6 +170,19 @@ def validate_manager_source(errors: list[str]) -> None:
     for pattern in required_patterns:
         if not re.search(pattern, source):
             errors.append(f"cli-tools/nddev_claude.py missing safety primitive: {pattern}")
+    for pattern in (
+        r"PROTOCOL_VERSION.*3",
+        r"ai-stp-bundle/1",
+        r"ai-stp-provider-plan/3",
+        r"ai-stp-provider-state/3",
+        r"provider_build_digest",
+        r"provider_release_digest",
+        r"expected_target_digest",
+    ):
+        if not re.search(pattern, provider_source):
+            errors.append(
+                f"cli-tools/provider_protocol_v3.py missing protocol primitive: {pattern}"
+            )
 
 
 def main() -> int:
@@ -207,6 +225,39 @@ def main() -> int:
             errors.append("contract marketplace_manifest does not resolve")
         setup_system = contract.get("setup_system", {})
         require_bool(setup_system, "plan_mutates", False, "setup_system", errors)
+        require_string(
+            setup_system,
+            "identity_kind",
+            "acquisition_channel",
+            "setup_system",
+            errors,
+        )
+        require_bool(setup_system, "immutable_setup_version", False, "setup_system", errors)
+        provider = contract.get("provider_protocol_v3", {})
+        if provider.get("protocol_version") != 3:
+            errors.append("provider_protocol_v3: protocol_version must be 3")
+        require_bool(
+            provider,
+            "prepared_and_composed_share_bundle_path",
+            True,
+            "provider_protocol_v3",
+            errors,
+        )
+        require_bool(
+            provider,
+            "post_lock_target_revalidation",
+            True,
+            "provider_protocol_v3",
+            errors,
+        )
+        if provider.get("core_commands") != [
+            "provider-info",
+            "validate-bundle",
+            "plan-operation",
+            "apply-operation",
+            "status",
+        ]:
+            errors.append("provider_protocol_v3: core_commands differ from protocol v3")
         managed_state = contract.get("managed_state", {})
         require_string(managed_state, "target_env", "CLAUDE_CONFIG_DIR", "managed_state", errors)
         safety = contract.get("safety", {})
@@ -235,6 +286,17 @@ def main() -> int:
         require_bool(command_policy, "status_mutates", False, "command_policy", errors)
         require_bool(command_policy, "executes_claude_binary", False, "command_policy", errors)
         require_bool(command_policy, "software_lifecycle_managed", False, "command_policy", errors)
+        provider_manifest = manifest.get("provider_protocol", {})
+        if provider_manifest.get("version") != 3:
+            errors.append("provider_protocol: version must be 3")
+        require_bool(
+            provider_manifest,
+            "software_lifecycle_managed",
+            False,
+            "provider_protocol",
+            errors,
+        )
+        require_bool(provider_manifest, "launch_managed", False, "provider_protocol", errors)
         transaction_policy = manifest.get("transaction_policy", {})
         for key in (
             "target_parent_private_current_user",

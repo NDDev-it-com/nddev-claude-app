@@ -19,16 +19,22 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import sys
 import tempfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
+
+import provider_protocol_v3 as v3
 
 ROOT = Path(__file__).resolve().parent.parent
 PRODUCT_NAME = "nddev-claude-app"
@@ -43,11 +49,64 @@ MAX_BACKUPS = 10
 OWNER_FILE_MODE = 0o600
 OWNER_DIR_MODE = 0o700
 MANAGED_PAYLOAD_MAX_BYTES = 4 * 1024 * 1024
+PROVIDER_STATE_NAME = "NDDEV-CLAUDE-PROVIDER.json"
+PROVIDER_STATE_SCHEMA = 3
+PROVIDER_BACKUP_SCHEMA = 3
+PROVIDER_BACKUP_POOL_NAME = "NDDEV-CLAUDE-PROVIDER-BACKUPS.json"
+PROVIDER_BACKUP_SLOT_NAME = "NDDEV-CLAUDE-PROVIDER-BACKUP.json"
+PROVIDER_BACKUP_DIRECTORY = ".nddev-claude-provider-backups"
+PROVIDER_OPERATIONS = v3.CORE_OPERATIONS
+PROVIDER_COMPONENTS = frozenset({"instruction", "skill", "mcp", "command", "agent"})
+PROVIDER_SURFACES = frozenset(
+    {
+        "CLAUDE.md",
+        "skills",
+        ".claude/skills",
+        "agents",
+        ".claude/agents",
+        "commands",
+        ".claude/commands",
+        ".mcp.json",
+    }
+)
 
 # The two settings.json keys this manager owns. Everything else in settings.json
 # is a sibling overlay preserved verbatim.
 MARKETPLACES_KEY = "extraKnownMarketplaces"
 ENABLED_PLUGINS_KEY = "enabledPlugins"
+
+
+def _manager_version() -> str:
+    return (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+
+def _projection_profile() -> dict[str, Any]:
+    """The exact currently implemented arbitrary-component projection.
+
+    Plugin, hook and setting components remain fail-closed until their bundle
+    representation can preserve Claude's marketplace and merge semantics.  The
+    standalone prepared catalog continues to own its existing marketplace.
+    """
+    return {
+        "profile_id": "nddev-claude-app/v3",
+        "component_kinds": sorted(PROVIDER_COMPONENTS),
+        "projection_kinds": ["native_files"],
+        "native_namespaces": sorted(PROVIDER_SURFACES),
+        "bundle_formats": [v3.BUNDLE_FORMAT],
+        "max_files": v3.MAX_FILES,
+        "max_bytes": v3.MAX_BUNDLE_BYTES,
+    }
+
+
+def provider_info() -> dict[str, Any]:
+    return v3.provider_info(
+        ROOT,
+        provider_id=PRODUCT_NAME,
+        harness_id="claude-code",
+        provider_version=_manager_version(),
+        operations=PROVIDER_OPERATIONS,
+        profile=_projection_profile(),
+    )
 
 
 class ManagerError(Exception):
@@ -609,6 +668,8 @@ def create_backup(
 
 
 def restore_backup(target: Path, slot: int) -> None:
+    if _lstat_optional(target / PROVIDER_STATE_NAME) is not None:
+        fail("standalone restore is unavailable while provider v3 state is installed")
     with _target_lock(target):
         transaction_dir = _create_transaction_dir(target)
         created_dirs = [transaction_dir]
@@ -783,21 +844,89 @@ def _restore_transaction(
 def inspect_target(target: Path) -> dict[str, Any]:
     target_st = _lstat_optional(target)
     if target_st is None:
-        return {"state": "missing", "setup_id": None, "drift": []}
+        return {
+            "state": "missing",
+            "setup_id": None,
+            "target_digest": _provider_target_digest(target),
+            "drift": [],
+        }
     _require_directory(target, target_st, label="--target", private=True)
+    if _lstat_optional(target / PROVIDER_STATE_NAME) is not None:
+        provider = _provider_state(target)
+        assert provider is not None
+        drift: list[str] = []
+        ownership = provider.get("native_ownership")
+        if not isinstance(ownership, list):
+            fail("provider v3 state is missing native_ownership")
+        for item in ownership:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                fail("provider v3 state has invalid native_ownership")
+            path = target / item["path"]
+            snapshot = _provider_read(path)
+            if (
+                not snapshot.present
+                or v3.raw_digest(snapshot.content) != item.get("digest")
+                or len(snapshot.content) != item.get("byte_length")
+                or snapshot.mode != item.get("mode")
+            ):
+                drift.append(item["path"])
+        observed_identity = _provider_target_digest(target)
+        if observed_identity != provider.get("target_identity_digest"):
+            drift.append(PROVIDER_STATE_NAME)
+        return {
+            "state": "managed",
+            "protocol_version": provider["protocol_version"],
+            "provider_id": provider["provider_id"],
+            "provider_build_digest": provider["provider_build_digest"],
+            "provider_release_digest": provider["provider_release_digest"],
+            "harness_id": provider["harness_id"],
+            "setup_id": None,
+            "setup_version_passport_digest": provider["setup_version_passport_digest"],
+            "setup_definition_digest": provider["setup_definition_digest"],
+            "component_refs": provider["component_refs"],
+            "bundle_digest": provider["bundle_digest"],
+            "artifact_digest": provider["artifact_digest"],
+            "provider_plan_digest": provider["provider_plan_digest"],
+            "provider_version": provider["provider_version"],
+            "projection_profile_digest": provider["projection_profile_digest"],
+            "operation_id": provider["operation_id"],
+            "target_precondition_digest": provider["target_precondition_digest"],
+            "native_ownership": provider["native_ownership"],
+            "previous_verified_identity": provider["previous_verified_identity"],
+            "target_identity_digest": observed_identity,
+            "target_digest": observed_identity,
+            "backup_ref": provider["backup_ref"],
+            "drift_state": "verified" if not drift else "local_drift",
+            "drift": drift,
+        }
     stamp = read_stamp(target)
     if stamp is None:
-        return {"state": "unmanaged", "setup_id": None, "drift": []}
+        return {
+            "state": "unmanaged",
+            "setup_id": None,
+            "target_digest": _provider_target_digest(target),
+            "drift": [],
+        }
     setup_id = stamp.get("setup_id")
     drift: list[str] = []
     try:
         setup = load_setup(str(setup_id))
     except ManagerError:
-        return {"state": "managed", "setup_id": setup_id, "drift": ["setup"]}
+        return {
+            "state": "managed",
+            "setup_id": setup_id,
+            "target_digest": _provider_target_digest(target),
+            "drift": ["setup"],
+        }
     settings = read_settings(target)
     if not managed_state_present(settings, setup):
         drift.append(SETTINGS_NAME)
-    return {"state": "managed", "setup_id": setup_id, "drift": drift}
+    return {
+        "state": "managed",
+        "setup_id": setup_id,
+        "target_digest": _provider_target_digest(target),
+        "drift": drift,
+    }
 
 
 # --- transactional operations ----------------------------------------------
@@ -878,6 +1007,8 @@ def plan(target: Path, setup: Setup) -> dict[str, Any]:
 
 
 def apply_setup(target: Path, setup: Setup, *, command: str) -> dict[str, Any]:
+    if _lstat_optional(target / PROVIDER_STATE_NAME) is not None:
+        fail("standalone catalog apply is unavailable while provider v3 state is installed")
     with _target_lock(target):
         prior = inspect_target(target)
         if command == "switch" and prior["state"] != "managed":
@@ -905,6 +1036,8 @@ def apply_setup(target: Path, setup: Setup, *, command: str) -> dict[str, Any]:
 
 
 def remove_setup(target: Path) -> dict[str, Any]:
+    if _lstat_optional(target / PROVIDER_STATE_NAME) is not None:
+        fail("use a confirmed provider v3 remove operation for provider-managed state")
     with _target_lock(target):
         status = inspect_target(target)
         if status["state"] != "managed":
@@ -929,6 +1062,784 @@ def remove_setup(target: Path) -> dict[str, Any]:
     }
 
 
+# --- ai_stp provider protocol v3 ------------------------------------------
+
+
+def _provider_bundle(args: argparse.Namespace) -> v3.BundleIdentity:
+    if args.bundle_format != v3.BUNDLE_FORMAT:
+        raise v3.ProtocolError(
+            "unsupported_bundle_format",
+            f"Claude provider supports {v3.BUNDLE_FORMAT} only",
+        )
+    if not isinstance(args.bundle, str) or not args.bundle:
+        raise v3.ProtocolError("digest_mismatch", "bundle path is required")
+    if not isinstance(args.bundle_digest, str) or not isinstance(args.artifact_digest, str):
+        raise v3.ProtocolError("digest_mismatch", "exact bundle digests are required")
+    if not isinstance(args.bundle_size, int) or args.bundle_size <= 0:
+        raise v3.ProtocolError("limit_exceeded", "exact positive bundle size is required")
+    return v3.validate_bundle(
+        Path(args.bundle),
+        expected_harness="claude-code",
+        expected_bundle_digest=args.bundle_digest,
+        expected_artifact_digest=args.artifact_digest,
+        expected_size=args.bundle_size,
+        supported_components=PROVIDER_COMPONENTS,
+        supported_surfaces=PROVIDER_SURFACES,
+    )
+
+
+def _provider_state(target: Path) -> dict[str, Any] | None:
+    path = target / PROVIDER_STATE_NAME
+    if _lstat_optional(path) is None:
+        return None
+    state = _read_json_file(path, max_bytes=MANAGED_PAYLOAD_MAX_BYTES)
+    if (
+        not isinstance(state, dict)
+        or state.get("state_schema") != v3.STATE_FORMAT
+        or state.get("protocol_version") != v3.PROTOCOL_VERSION
+        or state.get("provider_id") != PRODUCT_NAME
+        or state.get("canonical_target") != _target_key(target)
+    ):
+        fail(f"invalid provider v3 state: {path}")
+    return state
+
+
+def _provider_owned_paths(target: Path, state: dict[str, Any] | None) -> tuple[Path, ...]:
+    paths = [target / SETTINGS_NAME, target / STAMP_NAME, target / PROVIDER_STATE_NAME]
+    if state is not None:
+        ownership = state.get("native_ownership")
+        if not isinstance(ownership, list):
+            fail("provider v3 state is missing native_ownership")
+        for item in ownership:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                fail("provider v3 state has invalid native_ownership")
+            relative = item["path"]
+            if not relative or relative.startswith(("/", "~")) or ".." in Path(relative).parts:
+                fail("provider v3 state has unsafe native ownership path")
+            paths.append(target / relative)
+    return tuple(paths)
+
+
+def validate_provider_bundle(args: argparse.Namespace) -> dict[str, Any]:
+    bundle = _provider_bundle(args)
+    return {**bundle.echoes(), "valid": True}
+
+
+def plan_provider_operation(target: Path, args: argparse.Namespace) -> dict[str, Any]:
+    info = provider_info()
+    operation = str(args.operation)
+    if operation not in PROVIDER_OPERATIONS:
+        raise v3.ProtocolError(
+            "unsupported_operation", f"Claude provider does not support {operation}"
+        )
+    bundle = _provider_bundle(args) if operation in {"install", "replace"} else None
+    current = _provider_state(target) if _lstat_optional(target / PROVIDER_STATE_NAME) else None
+    if operation == "install" and current is not None:
+        raise v3.ProtocolError("target_already_managed", "install requires an unmanaged target")
+    if operation in {"replace", "backup", "remove"} and current is None:
+        raise v3.ProtocolError("target_unmanaged", f"{operation} requires provider-managed state")
+    try:
+        expiry = dt.datetime.fromisoformat(str(args.expires_at).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise v3.ProtocolError("plan_expired", "plan expiry is invalid") from exc
+    if expiry.tzinfo is None or expiry <= dt.datetime.now(dt.timezone.utc):
+        raise v3.ProtocolError("plan_expired", "plan expiry must be in the future")
+    expected_target_digest = _provider_target_digest(target)
+    profile = info["projection_profile"]
+    if not isinstance(profile, dict):
+        fail("provider projection profile is invalid")
+    effects: tuple[str, ...]
+    if (
+        operation == "replace"
+        and bundle is not None
+        and current is not None
+        and current.get("bundle_digest") == bundle.bundle_digest
+        and current.get("artifact_digest") == bundle.artifact_digest
+        and not inspect_target(target)["drift"]
+    ):
+        effects = ("refresh approved provider provenance; exact native bundle is already verified",)
+    elif bundle is not None:
+        effects = tuple(f"write managed native file {item['path']}" for item in bundle.owned_files)
+        effects = (*effects, f"write {PROVIDER_STATE_NAME}")
+    elif operation == "backup":
+        effects = ("create target-bound provider backup",)
+    elif operation == "restore":
+        effects = (f"restore target-bound provider backup {args.backup_ref}",)
+    else:
+        effects = ("remove provider-owned native files and provider state",)
+    artifact, plan_digest = v3.plan_artifact(
+        provider_id=PRODUCT_NAME,
+        provider_version=_manager_version(),
+        provider_build_digest=str(info["provider_build_digest"]),
+        provider_release_digest=args.provider_release_digest,
+        operation_id=args.operation_id,
+        operation=operation,
+        canonical_target=target,
+        expected_target_digest=expected_target_digest,
+        projection_profile_digest=str(profile["digest"]),
+        bundle=bundle,
+        backup_ref=args.backup_ref,
+        permission_profile=None,
+        effects=effects,
+        expires_at=args.expires_at,
+    )
+    return {
+        "state": "planned",
+        "plan": artifact,
+        "plan_digest": plan_digest,
+        "expected_target_digest": expected_target_digest,
+        "effects": list(effects),
+        **({} if bundle is None else bundle.echoes()),
+    }
+
+
+@dataclass(frozen=True)
+class ProviderFileSnapshot:
+    present: bool
+    content: bytes = b""
+    mode: int = OWNER_FILE_MODE
+
+
+def _provider_read(path: Path) -> ProviderFileSnapshot:
+    held = _lstat_optional(path)
+    if held is None:
+        return ProviderFileSnapshot(False)
+    _reject_symlink(path, held)
+    if not stat.S_ISREG(held.st_mode) or held.st_nlink != 1:
+        fail(f"provider-owned path must be one regular file: {path}")
+    _require_current_owner(path, held)
+    mode = _mode(held)
+    if mode not in {0o600, 0o644, 0o755}:
+        fail(f"provider-owned file mode is unsupported: {path}")
+    if held.st_size > MANAGED_PAYLOAD_MAX_BYTES:
+        fail(f"provider-owned file exceeds size limit: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        after = os.fstat(fd)
+        if after.st_dev != held.st_dev or after.st_ino != held.st_ino:
+            fail(f"provider-owned file changed during read: {path}")
+        with os.fdopen(fd, "rb") as handle:
+            content = handle.read(MANAGED_PAYLOAD_MAX_BYTES + 1)
+            fd = -1
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if len(content) > MANAGED_PAYLOAD_MAX_BYTES:
+        fail(f"provider-owned file exceeds size limit: {path}")
+    return ProviderFileSnapshot(True, content, mode)
+
+
+def _provider_ensure_parent(target: Path, path: Path, created: list[Path]) -> None:
+    try:
+        relative = path.relative_to(target)
+    except ValueError:
+        fail(f"provider path leaves target: {path}")
+    current = target
+    for part in relative.parts[:-1]:
+        current = current / part
+        held = _lstat_optional(current)
+        if held is None:
+            os.mkdir(current, OWNER_DIR_MODE)
+            os.chmod(current, OWNER_DIR_MODE)
+            created.append(current)
+            continue
+        _require_directory(current, held, label="provider managed directory", private=False)
+
+
+def _provider_write(
+    target: Path,
+    path: Path,
+    snapshot: ProviderFileSnapshot,
+    *,
+    transaction_dir: Path,
+    created_dirs: list[Path],
+) -> None:
+    _provider_ensure_parent(target, path, created_dirs)
+    if not snapshot.present:
+        held = _lstat_optional(path)
+        if held is None:
+            return
+        _reject_symlink(path, held)
+        if not stat.S_ISREG(held.st_mode) or held.st_nlink != 1:
+            fail(f"refusing to remove non-regular provider path: {path}")
+        _require_current_owner(path, held)
+        path.unlink()
+        return
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(transaction_dir))
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(snapshot.content)
+        os.chmod(temporary, snapshot.mode)
+        os.replace(temporary, path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temporary.unlink()
+
+
+def _provider_backup_root(target: Path) -> Path:
+    return target / PROVIDER_BACKUP_DIRECTORY
+
+
+@contextlib.contextmanager
+def _provider_target_lock(target: Path):
+    """Lock the canonical target inode without creating state outside it."""
+    held = _lstat_optional(target)
+    if held is None:
+        raise v3.ProtocolError("target_missing", "provider v3 target must already exist")
+    _require_directory(target, held, label="provider v3 target", private=True)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(target, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if opened.st_dev != held.st_dev or opened.st_ino != held.st_ino:
+            raise v3.ProtocolError("target_snapshot_invalid", "provider target changed during lock")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise v3.ProtocolError("target_locked", "provider target is already locked") from exc
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _provider_transaction_dir(target: Path) -> Path:
+    """Create same-filesystem staging inside the exact writable target only."""
+    name = tempfile.mkdtemp(prefix=".nddev-claude-provider-txn-", dir=str(target))
+    path = Path(name)
+    os.chmod(path, OWNER_DIR_MODE)
+    held = path.lstat()
+    _require_directory(path, held, label="provider transaction directory", private=True)
+    return path
+
+
+def _provider_backup_pool(target: Path, transaction_dir: Path, created: list[Path]) -> Path:
+    root = _provider_backup_root(target)
+    held = _lstat_optional(root)
+    marker = root / PROVIDER_BACKUP_POOL_NAME
+    expected = {
+        "schema_version": PROVIDER_BACKUP_SCHEMA,
+        "provider_id": PRODUCT_NAME,
+        "canonical_target": _target_key(target),
+    }
+    if held is None:
+        os.mkdir(root, OWNER_DIR_MODE)
+        os.chmod(root, OWNER_DIR_MODE)
+        created.append(root)
+        _atomic_write_json(marker, expected, transaction_dir=transaction_dir)
+        return root
+    _require_directory(root, held, label="provider backup directory", private=True)
+    if _read_json_file(marker, max_bytes=MANAGED_PAYLOAD_MAX_BYTES) != expected:
+        fail(f"provider backup pool is not bound to target: {root}")
+    return root
+
+
+def _provider_relative(target: Path, path: Path) -> str:
+    try:
+        relative = path.relative_to(target)
+    except ValueError:
+        fail(f"provider backup path leaves target: {path}")
+    if not relative.parts or ".." in relative.parts:
+        fail(f"provider backup path is unsafe: {path}")
+    return relative.as_posix()
+
+
+def _provider_create_backup(
+    target: Path,
+    paths: tuple[Path, ...],
+    *,
+    transaction_dir: Path,
+    created: list[Path],
+) -> tuple[str, Path]:
+    root = _provider_backup_pool(target, transaction_dir, created)
+    slots = sorted(int(path.name) for path in root.iterdir() if path.name.isdigit())
+    slot = slots[-1] + 1 if slots else 0
+    slot_dir = root / str(slot)
+    os.mkdir(slot_dir, OWNER_DIR_MODE)
+    os.chmod(slot_dir, OWNER_DIR_MODE)
+    created.append(slot_dir)
+    entries: list[dict[str, Any]] = []
+    unique = sorted(set(paths), key=str)
+    for index, path in enumerate(unique):
+        relative = _provider_relative(target, path)
+        snapshot = _provider_read(path)
+        entry: dict[str, Any] = {"path": relative, "present": snapshot.present}
+        if snapshot.present:
+            payload_name = f"payload-{index:04d}"
+            _write_bytes_atomic(
+                slot_dir / payload_name,
+                snapshot.content,
+                mode=snapshot.mode,
+                transaction_dir=transaction_dir,
+            )
+            entry.update(
+                {
+                    "payload": payload_name,
+                    "mode": snapshot.mode,
+                    "byte_length": len(snapshot.content),
+                    "digest": v3.raw_digest(snapshot.content),
+                }
+            )
+        entries.append(entry)
+    marker = {
+        "schema_version": PROVIDER_BACKUP_SCHEMA,
+        "provider_id": PRODUCT_NAME,
+        "canonical_target": _target_key(target),
+        "slot": slot,
+        "entries": entries,
+    }
+    marker_digest = v3.canonical_digest("nddev:claude-provider-backup:v3", marker)
+    marker["marker_digest"] = marker_digest
+    _atomic_write_json(
+        slot_dir / PROVIDER_BACKUP_SLOT_NAME, marker, transaction_dir=transaction_dir
+    )
+    return f"slot:{slot}:{marker_digest}", slot_dir
+
+
+def _provider_backup_marker(target: Path, backup_ref: str) -> tuple[Path, dict[str, Any]]:
+    match = re.fullmatch(r"slot:(\d+):(sha256:[0-9a-f]{64})", backup_ref)
+    if match is None:
+        raise v3.ProtocolError("backup_ref_invalid", "BackupRef has an invalid form")
+    slot_dir = _provider_backup_root(target) / match.group(1)
+    held = _lstat_optional(slot_dir)
+    if held is None:
+        raise v3.ProtocolError("backup_ref_invalid", "BackupRef does not exist")
+    _require_directory(slot_dir, held, label="provider backup slot", private=True)
+    marker = _read_json_file(
+        slot_dir / PROVIDER_BACKUP_SLOT_NAME, max_bytes=MANAGED_PAYLOAD_MAX_BYTES
+    )
+    if not isinstance(marker, dict):
+        raise v3.ProtocolError("backup_ref_invalid", "BackupRef marker is invalid")
+    claimed = marker.pop("marker_digest", None)
+    computed = v3.canonical_digest("nddev:claude-provider-backup:v3", marker)
+    marker["marker_digest"] = claimed
+    if (
+        claimed != match.group(2)
+        or claimed != computed
+        or marker.get("provider_id") != PRODUCT_NAME
+        or marker.get("canonical_target") != _target_key(target)
+    ):
+        raise v3.ProtocolError("backup_ref_invalid", "BackupRef identity does not match")
+    return slot_dir, marker
+
+
+def _provider_restore_entries(
+    target: Path,
+    slot_dir: Path,
+    marker: dict[str, Any],
+    *,
+    transaction_dir: Path,
+    created_dirs: list[Path],
+) -> None:
+    entries = marker.get("entries")
+    if not isinstance(entries, list):
+        raise v3.ProtocolError("backup_ref_invalid", "BackupRef entries are missing")
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            raise v3.ProtocolError("backup_ref_invalid", "BackupRef entry is invalid")
+        path = target / entry["path"]
+        if entry.get("present") is False:
+            snapshot = ProviderFileSnapshot(False)
+        else:
+            payload = entry.get("payload")
+            if not isinstance(payload, str) or not re.fullmatch(r"payload-\d{4}", payload):
+                raise v3.ProtocolError("backup_ref_invalid", "BackupRef payload name is invalid")
+            content = _provider_read(slot_dir / payload)
+            if (
+                not content.present
+                or v3.raw_digest(content.content) != entry.get("digest")
+                or len(content.content) != entry.get("byte_length")
+                or content.mode != entry.get("mode")
+            ):
+                raise v3.ProtocolError("backup_ref_invalid", "BackupRef payload differs")
+            snapshot = content
+        _provider_write(
+            target,
+            path,
+            snapshot,
+            transaction_dir=transaction_dir,
+            created_dirs=created_dirs,
+        )
+
+
+def _provider_prune_backups(target: Path) -> None:
+    root = _provider_backup_root(target)
+    if _lstat_optional(root) is None:
+        return
+    slots = sorted(int(path.name) for path in root.iterdir() if path.name.isdigit())
+    for slot in slots[:-MAX_BACKUPS]:
+        slot_dir = root / str(slot)
+        marker = _read_json_file(
+            slot_dir / PROVIDER_BACKUP_SLOT_NAME, max_bytes=MANAGED_PAYLOAD_MAX_BYTES
+        )
+        if not isinstance(marker, dict) or marker.get("canonical_target") != _target_key(target):
+            fail(f"refusing to prune unbound provider backup: {slot_dir}")
+        _remove_created_dir(slot_dir)
+
+
+def _provider_cleanup_empty_dirs(target: Path, paths: tuple[Path, ...]) -> None:
+    candidates = {
+        parent
+        for path in paths
+        for parent in path.parents
+        if parent != target and parent.is_relative_to(target)
+    }
+    for directory in sorted(candidates, key=lambda item: len(item.parts), reverse=True):
+        held = _lstat_optional(directory)
+        if held is None:
+            continue
+        _require_directory(directory, held, label="provider managed directory", private=False)
+        with contextlib.suppress(OSError):
+            directory.rmdir()
+
+
+def _provider_plan_file(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
+    path = Path(args.plan)
+    snapshot = _provider_read(path)
+    if not snapshot.present:
+        raise v3.ProtocolError("plan_invalid", "provider plan file is missing")
+    plan = v3.load_json_bytes(snapshot.content, "provider plan")
+    if not isinstance(plan, dict):
+        raise v3.ProtocolError("plan_invalid", "provider plan must be an object")
+    digest = v3.canonical_digest("ai-stp:provider-plan:v3", plan)
+    if digest != args.plan_digest:
+        raise v3.ProtocolError("plan_digest_mismatch", "provider plan digest differs")
+    return plan, digest
+
+
+def _provider_require_plan(target: Path, args: argparse.Namespace) -> tuple[dict[str, Any], str]:
+    plan, digest = _provider_plan_file(args)
+    info = provider_info()
+    profile = info["projection_profile"]
+    if not isinstance(profile, dict):
+        fail("provider projection profile is invalid")
+    expected = {
+        "format": v3.PLAN_FORMAT,
+        "protocol_version": v3.PROTOCOL_VERSION,
+        "provider_id": PRODUCT_NAME,
+        "provider_version": _manager_version(),
+        "provider_build_digest": info["provider_build_digest"],
+        "canonical_target": _target_key(target),
+        "projection_profile_digest": profile["digest"],
+    }
+    for name, value in expected.items():
+        if plan.get(name) != value:
+            raise v3.ProtocolError("plan_invalid", f"provider plan field differs: {name}")
+    if plan.get("provider_release_digest") != args.provider_release_digest:
+        raise v3.ProtocolError("plan_invalid", "provider release digest differs")
+    expires = plan.get("expires_at")
+    if not isinstance(expires, str):
+        raise v3.ProtocolError("plan_expired", "provider plan has no expiry")
+    try:
+        expiry = dt.datetime.fromisoformat(expires.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise v3.ProtocolError("plan_expired", "provider plan expiry is invalid") from exc
+    now = dt.datetime.now(dt.timezone.utc)
+    if expiry.tzinfo is None or expiry <= now:
+        raise v3.ProtocolError("plan_expired", "provider plan has expired")
+    operation = plan.get("operation")
+    if operation not in PROVIDER_OPERATIONS:
+        raise v3.ProtocolError("unsupported_operation", f"operation is unsupported: {operation}")
+    return plan, digest
+
+
+def _provider_bundle_from_plan(
+    plan: dict[str, Any], args: argparse.Namespace
+) -> v3.BundleIdentity | None:
+    operation = plan.get("operation")
+    expected = plan.get("bundle")
+    if operation not in {"install", "replace"}:
+        if expected is not None:
+            raise v3.ProtocolError("plan_invalid", "non-bundle operation binds a bundle")
+        return None
+    bundle = _provider_bundle(args)
+    if expected != bundle.echoes():
+        raise v3.ProtocolError("plan_digest_mismatch", "bundle differs from provider plan")
+    return bundle
+
+
+def _provider_bundle_snapshots(bundle: v3.BundleIdentity) -> dict[str, ProviderFileSnapshot]:
+    snapshots: dict[str, ProviderFileSnapshot] = {}
+    with zipfile.ZipFile(bundle.path, "r") as archive:
+        for item in bundle.owned_files:
+            relative = str(item["path"])
+            snapshots[relative] = ProviderFileSnapshot(
+                True,
+                archive.read(f"files/{relative}"),
+                int(item["mode"]),
+            )
+    return snapshots
+
+
+def _provider_state_payload(
+    target: Path,
+    plan: dict[str, Any],
+    plan_digest: str,
+    bundle: v3.BundleIdentity,
+    backup_ref: str,
+    previous: dict[str, Any] | None,
+) -> dict[str, Any]:
+    setup = bundle.manifest.get("setup")
+    artifact = bundle.setup_passport.get("artifact")
+    if not isinstance(setup, dict) or not isinstance(artifact, dict):
+        raise v3.ProtocolError("digest_mismatch", "setup provenance is incomplete")
+    state: dict[str, Any] = {
+        "state_schema": v3.STATE_FORMAT,
+        "protocol_version": v3.PROTOCOL_VERSION,
+        "provider_id": PRODUCT_NAME,
+        "provider_version": _manager_version(),
+        "provider_build_digest": plan["provider_build_digest"],
+        "provider_release_digest": plan["provider_release_digest"],
+        "harness_id": "claude-code",
+        "canonical_target": _target_key(target),
+        "target_identity_digest": "",
+        "setup_version_passport_digest": str(setup.get("passport_digest", "")),
+        "setup_definition_digest": str(artifact.get("digest", "")),
+        "component_refs": list(bundle.components),
+        "bundle_format": v3.BUNDLE_FORMAT,
+        "bundle_digest": bundle.bundle_digest,
+        "artifact_digest": bundle.artifact_digest,
+        "projection_profile_digest": plan["projection_profile_digest"],
+        "provider_plan_digest": plan_digest,
+        "operation_id": plan["operation_id"],
+        "target_precondition_digest": plan["expected_target_digest"],
+        "native_ownership": list(bundle.owned_files),
+        "backup_ref": backup_ref,
+        "previous_verified_identity": (
+            None if previous is None else previous.get("target_identity_digest")
+        ),
+        "drift_state": "verified",
+    }
+    for name in (
+        "setup_version_passport_digest",
+        "setup_definition_digest",
+        "bundle_digest",
+        "artifact_digest",
+        "projection_profile_digest",
+        "provider_plan_digest",
+        "target_precondition_digest",
+    ):
+        v3.require_digest(str(state[name]), name)
+    return state
+
+
+def _provider_target_digest(target: Path) -> str:
+    state = _provider_state(target) if _lstat_optional(target / PROVIDER_STATE_NAME) else None
+    paths = [target / SETTINGS_NAME, target / STAMP_NAME]
+    if state is not None:
+        paths.extend(_provider_owned_paths(target, state)[3:])
+    native = v3.target_digest(target, tuple(paths))
+    state_identity: dict[str, Any] | None = None
+    if state is not None:
+        state_identity = dict(state)
+        state_identity.pop("target_identity_digest", None)
+    return v3.canonical_digest(
+        "nddev:claude-provider-target:v3", {"native": native, "state": state_identity}
+    )
+
+
+def apply_provider_operation(target: Path, args: argparse.Namespace) -> dict[str, Any]:
+    plan, plan_digest = _provider_require_plan(target, args)
+    bundle = _provider_bundle_from_plan(plan, args)
+    operation = str(plan["operation"])
+    target_missing_at_start = _lstat_optional(target) is None
+    created: list[Path] = []
+    backup_slot: Path | None = None
+    recovery_backup_ref: str | None = None
+    native_content_changed = True
+    with _provider_target_lock(target):
+        if _provider_target_digest(target) != plan.get("expected_target_digest"):
+            return {
+                "state": "stale",
+                "plan_digest": plan_digest,
+                "expected_target_digest": plan.get("expected_target_digest"),
+            }
+        current = _provider_state(target) if _lstat_optional(target / PROVIDER_STATE_NAME) else None
+        same_bundle_verified = (
+            operation == "replace"
+            and bundle is not None
+            and current is not None
+            and current.get("bundle_digest") == bundle.bundle_digest
+            and current.get("artifact_digest") == bundle.artifact_digest
+            and not inspect_target(target)["drift"]
+        )
+        native_content_changed = not same_bundle_verified
+        transaction = _provider_transaction_dir(target)
+        created.append(transaction)
+        old_paths = _provider_owned_paths(target, current)
+        bundle_snapshots = {} if bundle is None else _provider_bundle_snapshots(bundle)
+        future_paths = tuple(target / relative for relative in bundle_snapshots)
+        restore_slot: Path | None = None
+        restore_marker: dict[str, Any] | None = None
+        restore_paths: tuple[Path, ...] = ()
+        if operation == "restore":
+            restore_ref = str(plan.get("backup_ref"))
+            restore_slot, restore_marker = _provider_backup_marker(target, restore_ref)
+            entries = restore_marker.get("entries")
+            if not isinstance(entries, list):
+                raise v3.ProtocolError("backup_ref_invalid", "BackupRef entries are missing")
+            restore_paths = tuple(
+                target / str(entry.get("path"))
+                for entry in entries
+                if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+            )
+            if len(restore_paths) != len(entries):
+                raise v3.ProtocolError("backup_ref_invalid", "BackupRef entry is invalid")
+        all_paths = tuple(sorted(set((*old_paths, *future_paths, *restore_paths)), key=str))
+        before = {path: _provider_read(path) for path in all_paths}
+        try:
+            _ensure_target_for_write(target)
+            if operation in {"install", "replace"}:
+                assert bundle is not None
+                current_owned = {
+                    str(item["path"])
+                    for item in ([] if current is None else current.get("native_ownership", []))
+                    if isinstance(item, dict) and isinstance(item.get("path"), str)
+                }
+                for relative in bundle_snapshots:
+                    path = target / relative
+                    if _lstat_optional(path) is not None and relative not in current_owned:
+                        raise v3.ProtocolError(
+                            "native_ownership_conflict",
+                            f"refusing to replace unmanaged native path: {relative}",
+                        )
+            backup_ref, backup_slot = _provider_create_backup(
+                target,
+                all_paths,
+                transaction_dir=transaction,
+                created=created,
+            )
+            if operation == "restore":
+                recovery_backup_ref = backup_ref
+            if operation in {"install", "replace"}:
+                assert bundle is not None
+                new_paths = set(bundle_snapshots)
+                if current is not None:
+                    for item in current.get("native_ownership", []):
+                        if isinstance(item, dict) and item.get("path") not in new_paths:
+                            _provider_write(
+                                target,
+                                target / str(item["path"]),
+                                ProviderFileSnapshot(False),
+                                transaction_dir=transaction,
+                                created_dirs=created,
+                            )
+                for relative, snapshot in bundle_snapshots.items():
+                    _provider_write(
+                        target,
+                        target / relative,
+                        snapshot,
+                        transaction_dir=transaction,
+                        created_dirs=created,
+                    )
+                state = _provider_state_payload(
+                    target, plan, plan_digest, bundle, backup_ref, current
+                )
+                state_without_identity = dict(state)
+                state_without_identity.pop("target_identity_digest", None)
+                native_paths = [target / SETTINGS_NAME, target / STAMP_NAME, *future_paths]
+                state["target_identity_digest"] = v3.canonical_digest(
+                    "nddev:claude-provider-target:v3",
+                    {
+                        "native": v3.target_digest(target, tuple(native_paths)),
+                        "state": state_without_identity,
+                    },
+                )
+                _atomic_write_json(
+                    target / PROVIDER_STATE_NAME,
+                    state,
+                    transaction_dir=transaction,
+                )
+            elif operation == "backup":
+                pass
+            elif operation == "remove":
+                if current is None:
+                    raise v3.ProtocolError("target_unmanaged", "provider target is not managed")
+                for path in _provider_owned_paths(target, current)[3:]:
+                    _provider_write(
+                        target,
+                        path,
+                        ProviderFileSnapshot(False),
+                        transaction_dir=transaction,
+                        created_dirs=created,
+                    )
+                _provider_write(
+                    target,
+                    target / PROVIDER_STATE_NAME,
+                    ProviderFileSnapshot(False),
+                    transaction_dir=transaction,
+                    created_dirs=created,
+                )
+            elif operation == "restore":
+                assert restore_slot is not None and restore_marker is not None
+                selected_backup_ref = str(plan.get("backup_ref"))
+                selected_paths = set(restore_paths)
+                for path in old_paths:
+                    if path not in selected_paths:
+                        _provider_write(
+                            target,
+                            path,
+                            ProviderFileSnapshot(False),
+                            transaction_dir=transaction,
+                            created_dirs=created,
+                        )
+                _provider_restore_entries(
+                    target,
+                    restore_slot,
+                    restore_marker,
+                    transaction_dir=transaction,
+                    created_dirs=created,
+                )
+                backup_ref = selected_backup_ref
+            else:  # pragma: no cover - plan validation closes the set
+                raise v3.ProtocolError("unsupported_operation", operation)
+            _provider_cleanup_empty_dirs(target, all_paths)
+        except BaseException:
+            for path, snapshot in before.items():
+                _provider_write(
+                    target,
+                    path,
+                    snapshot,
+                    transaction_dir=transaction,
+                    created_dirs=created,
+                )
+            if backup_slot is not None and _lstat_optional(backup_slot) is not None:
+                _remove_created_dir(backup_slot)
+            for directory in sorted(created, key=lambda item: len(item.parts), reverse=True):
+                if directory.is_relative_to(target) and _lstat_optional(directory) is not None:
+                    with contextlib.suppress(OSError):
+                        directory.rmdir()
+            backup_root = _provider_backup_root(target)
+            if backup_root in created and _lstat_optional(backup_root) is not None:
+                _remove_file(backup_root / PROVIDER_BACKUP_POOL_NAME)
+                with contextlib.suppress(OSError):
+                    backup_root.rmdir()
+            if target_missing_at_start and _lstat_optional(target) is not None:
+                with contextlib.suppress(OSError):
+                    target.rmdir()
+            raise
+        finally:
+            if _lstat_optional(transaction) is not None:
+                _remove_created_dir(transaction)
+        _provider_prune_backups(target)
+    answer = {
+        "state": "verified",
+        "operation": operation,
+        "changed": native_content_changed,
+        "plan_digest": plan_digest,
+        "expected_target_digest": plan["expected_target_digest"],
+        "backup_ref": backup_ref,
+    }
+    if recovery_backup_ref is not None:
+        answer["recovery_backup_ref"] = recovery_backup_ref
+    if bundle is not None:
+        answer.update(bundle.echoes())
+    return answer
+
+
 # --- CLI -------------------------------------------------------------------
 
 
@@ -945,6 +1856,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("list", help="List source setups.")
+    subparsers.add_parser("provider-info", help="Report provider protocol v3 capabilities.")
 
     def target_command(name: str, help_text: str) -> argparse.ArgumentParser:
         sub = subparsers.add_parser(name, help=help_text)
@@ -959,6 +1871,36 @@ def build_parser() -> argparse.ArgumentParser:
     restore = target_command("restore", "Restore a target-bound backup.")
     restore.add_argument("--backup", type=int, required=True, help="Backup slot 0..9.")
     target_command("remove", "Remove only managed setup state.")
+
+    def bundle_arguments(sub: argparse.ArgumentParser) -> None:
+        sub.add_argument("--bundle", required=True, help="Absolute ai-stp-bundle/1 ZIP path.")
+        sub.add_argument("--bundle-format", required=True)
+        sub.add_argument("--bundle-digest", required=True)
+        sub.add_argument("--artifact-digest", required=True)
+        sub.add_argument("--bundle-size", type=int, required=True)
+
+    validate = target_command("validate-bundle", "Validate an exact HarnessBundle.")
+    bundle_arguments(validate)
+    provider_plan = target_command("plan-operation", "Plan one provider v3 operation.")
+    provider_plan.add_argument("--operation", required=True)
+    provider_plan.add_argument("--provider-release-digest", required=True)
+    provider_plan.add_argument("--operation-id", required=True)
+    provider_plan.add_argument("--expires-at", required=True)
+    provider_plan.add_argument("--backup-ref")
+    provider_plan.add_argument("--bundle")
+    provider_plan.add_argument("--bundle-format")
+    provider_plan.add_argument("--bundle-digest")
+    provider_plan.add_argument("--artifact-digest")
+    provider_plan.add_argument("--bundle-size", type=int)
+    provider_apply = target_command("apply-operation", "Apply one exact provider v3 plan.")
+    provider_apply.add_argument("--plan", required=True)
+    provider_apply.add_argument("--plan-digest", required=True)
+    provider_apply.add_argument("--provider-release-digest", required=True)
+    provider_apply.add_argument("--bundle")
+    provider_apply.add_argument("--bundle-format")
+    provider_apply.add_argument("--bundle-digest")
+    provider_apply.add_argument("--artifact-digest")
+    provider_apply.add_argument("--bundle-size", type=int)
     return parser
 
 
@@ -977,12 +1919,21 @@ def main(argv: list[str] | None = None) -> int:
             ]
             print(json.dumps({"setups": setups}, indent=2))
             return 0
+        if args.command == "provider-info":
+            print(json.dumps(provider_info(), indent=2, sort_keys=True))
+            return 0
 
         target = resolve_target(args.target)
         as_json = getattr(args, "json", False)
 
         if args.command == "status":
             _emit(inspect_target(target), as_json)
+        elif args.command == "validate-bundle":
+            _emit(validate_provider_bundle(args), as_json)
+        elif args.command == "plan-operation":
+            _emit(plan_provider_operation(target, args), as_json)
+        elif args.command == "apply-operation":
+            _emit(apply_provider_operation(target, args), as_json)
         elif args.command == "plan":
             _emit(plan(target, load_setup(args.setup)), as_json)
         elif args.command == "apply":
@@ -997,8 +1948,26 @@ def main(argv: list[str] | None = None) -> int:
         else:  # pragma: no cover - argparse enforces the choice set
             fail(f"unknown command: {args.command}")
         return 0
-    except ManagerError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    except (ManagerError, v3.ProtocolError) as exc:
+        if getattr(args, "json", False):
+            reason = getattr(exc, "reason", "provider_error")
+            failure: dict[str, Any] = {
+                "rejected": True,
+                "reason": reason,
+                "message": str(exc),
+            }
+            if args.command == "validate-bundle":
+                failure.update(
+                    {
+                        "bundle_format": args.bundle_format,
+                        "bundle_digest": args.bundle_digest,
+                        "artifact_digest": args.artifact_digest,
+                        "bundle_size": args.bundle_size,
+                    }
+                )
+            print(json.dumps(failure, sort_keys=True))
+        else:
+            print(f"error: {exc}", file=sys.stderr)
         return 1
 
 

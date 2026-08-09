@@ -2,6 +2,24 @@
 
 All notable changes to `nddev-claude-app` are documented here.
 
+## [0.2.0] - 2026-08-09
+
+- Add the capability-negotiated provider protocol v3 core without assigning
+  Claude host-software or launch ownership to the setup manager.
+- Make prepared and composed setups converge on one deterministic
+  `ai-stp-bundle/1` validate/plan/apply/status path with exact plan binding,
+  post-lock target revalidation, fail-closed native-surface validation, and
+  component-level provenance.
+- Add a versioned provider state and independent target-bound backup pool with
+  exact restore references, pre-restore recovery backups, rollback, drift
+  reporting, no-op replacement, and managed residue removal.
+- Keep protocol-v3 locks, transactions, and backups inside the exact writable
+  target boundary; lock the canonical target inode without widening sandbox
+  access to its parent or siblings.
+- Classify standalone `stable` and `edge` as acquisition channels rather than
+  immutable ai_stp setup versions; ai_stp resolves exact content before the
+  bundle reaches the provider.
+
 ## [0.1.6] - 2026-08-08
 
 - Revalidate the native marketplace, plugin, hook, skill, agent, settings, and

@@ -37,6 +37,7 @@
       "validate-bundle",
       "plan-operation",
       "apply-operation",
+      "recover-operation",
       "status"
     ],
     "operations": ["backup", "install", "remove", "replace", "restore"],

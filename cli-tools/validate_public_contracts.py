@@ -255,6 +255,7 @@ def main() -> int:
             "validate-bundle",
             "plan-operation",
             "apply-operation",
+            "recover-operation",
             "status",
         ]:
             errors.append("provider_protocol_v3: core_commands differ from protocol v3")

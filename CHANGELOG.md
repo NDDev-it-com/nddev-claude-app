@@ -16,6 +16,8 @@ All notable changes to `nddev-claude-app` are documented here.
 - Keep protocol-v3 locks, transactions, and backups inside the exact writable
   target boundary; lock the canonical target inode without widening sandbox
   access to its parent or siblings.
+- Add an explicit durable `recover-operation`, complete directory-component
+  preservation, and fail-closed native JSON/tree-marker validation before plan.
 - Classify standalone `stable` and `edge` as acquisition channels rather than
   immutable ai_stp setup versions; ai_stp resolves exact content before the
   bundle reaches the provider.

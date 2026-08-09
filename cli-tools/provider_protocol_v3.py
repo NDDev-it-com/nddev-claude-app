@@ -29,6 +29,7 @@ CORE_COMMANDS: Final[tuple[str, ...]] = (
     "validate-bundle",
     "plan-operation",
     "apply-operation",
+    "recover-operation",
     "status",
 )
 OPTIONAL_COMMANDS: Final[tuple[str, ...]] = ("launch",)
@@ -69,7 +70,10 @@ def _normalize(value: Any) -> Any:
     if value is None or isinstance(value, bool | int):
         return value
     if isinstance(value, float):
-        refuse("canonical_json_invalid", "floating point is not allowed in provider artifacts")
+        refuse(
+            "canonical_json_invalid",
+            "floating point is not allowed in provider artifacts",
+        )
     if isinstance(value, str):
         if "\ufeff" in value:
             refuse("canonical_json_invalid", "byte-order marks are not allowed")
@@ -149,6 +153,7 @@ class BundleIdentity:
     manifest: dict[str, Any]
     setup_passport: dict[str, Any]
     components: tuple[dict[str, str], ...]
+    conversions: tuple[dict[str, str], ...]
     owned_files: tuple[dict[str, Any], ...]
 
     def echoes(self) -> dict[str, Any]:
@@ -243,7 +248,10 @@ def validate_bundle(
             kind, mode = _member_mode(info)
             if info.is_dir():
                 if kind != stat.S_IFDIR or mode != 0o755:
-                    refuse("special_file_not_allowed", "bundle directory metadata is invalid")
+                    refuse(
+                        "special_file_not_allowed",
+                        "bundle directory metadata is invalid",
+                    )
             elif kind == stat.S_IFLNK:
                 refuse("link_not_allowed", "bundle symbolic links are forbidden")
             elif kind != stat.S_IFREG or mode not in {0o644, 0o755}:
@@ -266,7 +274,10 @@ def validate_bundle(
             or not isinstance(passport, dict)
             or not isinstance(composition, dict)
         ):
-            refuse("digest_mismatch", "bundle manifest, passport and reports must be objects")
+            refuse(
+                "digest_mismatch",
+                "bundle manifest, passport and reports must be objects",
+            )
         if manifest.get("bundle_format") != BUNDLE_FORMAT:
             refuse("unsupported_bundle_format", "provider supports ai-stp-bundle/1 only")
         if manifest.get("protocol_version") != BUNDLE_PROTOCOL_VERSION:
@@ -284,6 +295,7 @@ def validate_bundle(
         if not isinstance(entries, list):
             refuse("unsupported_native_surface", "bundle conversion entries are missing")
         converted_ids: list[str] = []
+        conversions: list[dict[str, str]] = []
         for entry in entries:
             if not isinstance(entry, dict):
                 refuse("unsupported_native_surface", "bundle conversion entry is invalid")
@@ -291,12 +303,35 @@ def validate_bundle(
             surface = entry.get("native_surface")
             stable_id = entry.get("stable_id")
             if not isinstance(stable_id, str) or not stable_id:
-                refuse("unsupported_native_surface", "conversion component identity is missing")
+                refuse(
+                    "unsupported_native_surface",
+                    "conversion component identity is missing",
+                )
             converted_ids.append(stable_id)
             if kind not in supported_components:
-                refuse("unsupported_component_kind", f"component kind is unsupported: {kind}")
+                refuse(
+                    "unsupported_component_kind",
+                    f"component kind is unsupported: {kind}",
+                )
             if surface not in supported_surfaces or entry.get("state") != "complete":
-                refuse("unsupported_native_surface", f"native surface is unsupported: {surface}")
+                refuse(
+                    "unsupported_native_surface",
+                    f"native surface is unsupported: {surface}",
+                )
+            projection_kind = entry.get("projection_kind", "native_files")
+            if projection_kind not in PROJECTION_KINDS:
+                refuse(
+                    "unsupported_native_surface",
+                    f"projection kind is unsupported: {projection_kind}",
+                )
+            conversions.append(
+                {
+                    "stable_id": stable_id,
+                    "component_type": str(kind),
+                    "native_surface": str(surface),
+                    "projection_kind": str(projection_kind),
+                }
+            )
         if len(converted_ids) != len(set(converted_ids)):
             refuse("path_duplicate", "bundle conversion repeats a component identity")
         raw_files = manifest.get("files")
@@ -311,7 +346,10 @@ def validate_bundle(
             if declared_kind in {"symlink", "hardlink"}:
                 refuse("link_not_allowed", "bundle link records are forbidden")
             if declared_kind == "special":
-                refuse("special_file_not_allowed", "bundle special-file records are forbidden")
+                refuse(
+                    "special_file_not_allowed",
+                    "bundle special-file records are forbidden",
+                )
             byte_length = item.get("byte_length")
             if (
                 not isinstance(byte_length, int)
@@ -356,7 +394,10 @@ def validate_bundle(
             if info.filename.startswith("files/") and not info.is_dir()
         ]
         if observed_file_names != expected_file_names:
-            refuse("path_duplicate", "bundle file order or membership differs from manifest")
+            refuse(
+                "path_duplicate",
+                "bundle file order or membership differs from manifest",
+            )
         exact_order = [
             "bundle.json",
             "setup-passport.json",
@@ -367,7 +408,10 @@ def validate_bundle(
             "attestations/",
         ]
         if [info.filename for info in infos] != exact_order:
-            refuse("path_duplicate", "bundle ZIP order or membership differs from the format")
+            refuse(
+                "path_duplicate",
+                "bundle ZIP order or membership differs from the format",
+            )
         if manifest.get("managed_paths") != [item["path"] for item in owned]:
             refuse("digest_mismatch", "managed_paths differs from the file manifest")
         document_manifest = manifest.get("documents")
@@ -416,6 +460,9 @@ def validate_bundle(
             refuse("digest_mismatch", "conversion report differs from exact components")
         if any(item["owner"] not in set(component_ids) for item in owned):
             refuse("digest_mismatch", "managed file owner is not an exact component")
+        owned_component_ids = {item["owner"] for item in owned}
+        if owned_component_ids != set(component_ids):
+            refuse("digest_mismatch", "every exact component must own native bundle content")
         chosen = composition.get("chosen")
         if not isinstance(chosen, list):
             refuse("digest_mismatch", "composition report choices are missing")
@@ -435,6 +482,7 @@ def validate_bundle(
             manifest=manifest,
             setup_passport=passport,
             components=tuple(exact_components),
+            conversions=tuple(conversions),
             owned_files=tuple(owned),
         )
 
@@ -493,7 +541,10 @@ def target_digest(target: Path, managed_paths: tuple[Path, ...]) -> str:
         if stat.S_ISLNK(held.st_mode):
             refuse("target_snapshot_invalid", f"managed target path is a symlink: {relative}")
         if not stat.S_ISREG(held.st_mode):
-            refuse("target_snapshot_invalid", f"managed target path is not regular: {relative}")
+            refuse(
+                "target_snapshot_invalid",
+                f"managed target path is not regular: {relative}",
+            )
         if held.st_nlink != 1:
             refuse("target_snapshot_invalid", f"managed target path is hardlinked: {relative}")
         content = path.read_bytes()
@@ -521,6 +572,7 @@ def plan_artifact(
     projection_profile_digest: str,
     bundle: BundleIdentity | None,
     backup_ref: str | None,
+    restore_target_digest: str | None,
     permission_profile: str | None,
     effects: tuple[str, ...],
     expires_at: str,
@@ -531,6 +583,10 @@ def plan_artifact(
         refuse("digest_mismatch", "install and replace require an exact bundle")
     if operation == "restore" and not backup_ref:
         refuse("backup_ref_invalid", "restore requires an exact BackupRef")
+    if operation == "restore":
+        require_digest(str(restore_target_digest or ""), "restore_target_digest")
+    elif restore_target_digest is not None:
+        refuse("plan_invalid", "only restore may bind a restored target digest")
     require_digest(provider_build_digest, "provider_build_digest")
     require_digest(provider_release_digest, "provider_release_digest")
     require_digest(expected_target_digest, "expected_target_digest")
@@ -551,6 +607,7 @@ def plan_artifact(
         "projection_profile_digest": projection_profile_digest,
         "bundle": None if bundle is None else bundle.echoes(),
         "backup_ref": backup_ref,
+        "restore_target_digest": restore_target_digest,
         "permission_profile": permission_profile,
         "platform": canonical_platform(),
         "expires_at": expires_at,

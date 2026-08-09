@@ -30,6 +30,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
+# Fault-injection consumers load this file through ``spec_from_file_location``,
+# which does not make sibling vendored modules importable by itself.
+CLI_TOOLS_ROOT = Path(__file__).resolve().parent
+if str(CLI_TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(CLI_TOOLS_ROOT))
+
+import provider_protocol_v3 as v3  # noqa: E402
+import provider_runtime_v3  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 PRODUCT_NAME = "nddev-claude-app"
 STAMP_NAME = "NDDEV-CLAUDE-SETUP.json"
@@ -43,11 +52,72 @@ MAX_BACKUPS = 10
 OWNER_FILE_MODE = 0o600
 OWNER_DIR_MODE = 0o700
 MANAGED_PAYLOAD_MAX_BYTES = 4 * 1024 * 1024
+PROVIDER_STATE_NAME = "NDDEV-CLAUDE-PROVIDER.json"
+PROVIDER_STATE_SCHEMA = 3
+PROVIDER_BACKUP_SCHEMA = 3
+PROVIDER_BACKUP_POOL_NAME = "NDDEV-CLAUDE-PROVIDER-BACKUPS.json"
+PROVIDER_BACKUP_SLOT_NAME = "NDDEV-CLAUDE-PROVIDER-BACKUP.json"
+PROVIDER_BACKUP_DIRECTORY = ".nddev-claude-provider-backups"
+PROVIDER_OPERATIONS = v3.CORE_OPERATIONS
+PROVIDER_COMPONENTS = frozenset({"instruction", "skill", "mcp", "command", "agent"})
+PROVIDER_SURFACES = frozenset(
+    {
+        "CLAUDE.md",
+        "skills",
+        ".claude/skills",
+        "agents",
+        ".claude/agents",
+        "commands",
+        ".claude/commands",
+        ".mcp.json",
+    }
+)
 
 # The two settings.json keys this manager owns. Everything else in settings.json
 # is a sibling overlay preserved verbatim.
 MARKETPLACES_KEY = "extraKnownMarketplaces"
 ENABLED_PLUGINS_KEY = "enabledPlugins"
+
+
+def _manager_version() -> str:
+    return (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+
+PROVIDER_V3 = provider_runtime_v3.Runtime(
+    provider_runtime_v3.Config(
+        root=ROOT,
+        provider_id=PRODUCT_NAME,
+        harness_id="claude-code",
+        provider_version=_manager_version(),
+        state_name=PROVIDER_STATE_NAME,
+        backup_directory=PROVIDER_BACKUP_DIRECTORY,
+        component_kinds=PROVIDER_COMPONENTS,
+        native_namespaces=PROVIDER_SURFACES,
+        syntax_by_path=((".mcp.json", "json"),),
+    )
+)
+
+
+def _projection_profile() -> dict[str, Any]:
+    """The exact currently implemented arbitrary-component projection.
+
+    Plugin, hook and setting components remain fail-closed until their bundle
+    representation can preserve Claude's marketplace and merge semantics.  The
+    standalone prepared catalog continues to own its existing marketplace.
+    """
+    return {
+        "profile_id": "nddev-claude-app/v3",
+        "component_kinds": sorted(PROVIDER_COMPONENTS),
+        "projection_kinds": ["native_files"],
+        "native_namespaces": sorted(PROVIDER_SURFACES),
+        "bundle_formats": [v3.BUNDLE_FORMAT],
+        "max_files": v3.MAX_FILES,
+        "max_bytes": v3.MAX_BUNDLE_BYTES,
+    }
+
+
+def provider_info() -> dict[str, Any]:
+    return PROVIDER_V3.info()
 
 
 class ManagerError(Exception):
@@ -609,6 +679,8 @@ def create_backup(
 
 
 def restore_backup(target: Path, slot: int) -> None:
+    if _lstat_optional(target / PROVIDER_STATE_NAME) is not None:
+        fail("standalone restore is unavailable while provider v3 state is installed")
     with _target_lock(target):
         transaction_dir = _create_transaction_dir(target)
         created_dirs = [transaction_dir]
@@ -780,24 +852,55 @@ def _restore_transaction(
 # --- inspection ------------------------------------------------------------
 
 
+def _provider_target_digest(target: Path) -> str:
+    """Use the one shared v3 target identity for standalone status output."""
+    return str(PROVIDER_V3.status(target)["target_digest"])
+
+
 def inspect_target(target: Path) -> dict[str, Any]:
     target_st = _lstat_optional(target)
     if target_st is None:
-        return {"state": "missing", "setup_id": None, "drift": []}
+        return {
+            "state": "missing",
+            "setup_id": None,
+            "target_digest": _provider_target_digest(target),
+            "drift": [],
+        }
     _require_directory(target, target_st, label="--target", private=True)
+    if _lstat_optional(target / PROVIDER_STATE_NAME) is not None:
+        provider = PROVIDER_V3.status(target)
+        if provider.get("drift_state") == "drifted":
+            provider["drift_state"] = "local_drift"
+        provider["setup_id"] = None
+        return provider
     stamp = read_stamp(target)
     if stamp is None:
-        return {"state": "unmanaged", "setup_id": None, "drift": []}
+        return {
+            "state": "unmanaged",
+            "setup_id": None,
+            "target_digest": _provider_target_digest(target),
+            "drift": [],
+        }
     setup_id = stamp.get("setup_id")
     drift: list[str] = []
     try:
         setup = load_setup(str(setup_id))
     except ManagerError:
-        return {"state": "managed", "setup_id": setup_id, "drift": ["setup"]}
+        return {
+            "state": "managed",
+            "setup_id": setup_id,
+            "target_digest": _provider_target_digest(target),
+            "drift": ["setup"],
+        }
     settings = read_settings(target)
     if not managed_state_present(settings, setup):
         drift.append(SETTINGS_NAME)
-    return {"state": "managed", "setup_id": setup_id, "drift": drift}
+    return {
+        "state": "managed",
+        "setup_id": setup_id,
+        "target_digest": _provider_target_digest(target),
+        "drift": drift,
+    }
 
 
 # --- transactional operations ----------------------------------------------
@@ -878,6 +981,8 @@ def plan(target: Path, setup: Setup) -> dict[str, Any]:
 
 
 def apply_setup(target: Path, setup: Setup, *, command: str) -> dict[str, Any]:
+    if _lstat_optional(target / PROVIDER_STATE_NAME) is not None:
+        fail("standalone catalog apply is unavailable while provider v3 state is installed")
     with _target_lock(target):
         prior = inspect_target(target)
         if command == "switch" and prior["state"] != "managed":
@@ -905,6 +1010,8 @@ def apply_setup(target: Path, setup: Setup, *, command: str) -> dict[str, Any]:
 
 
 def remove_setup(target: Path) -> dict[str, Any]:
+    if _lstat_optional(target / PROVIDER_STATE_NAME) is not None:
+        fail("use a confirmed provider v3 remove operation for provider-managed state")
     with _target_lock(target):
         status = inspect_target(target)
         if status["state"] != "managed":
@@ -929,6 +1036,24 @@ def remove_setup(target: Path) -> dict[str, Any]:
     }
 
 
+# --- ai_stp provider protocol v3 ------------------------------------------
+
+
+def validate_provider_bundle(args: argparse.Namespace) -> dict[str, Any]:
+    """Validate a v3 bundle through the shared public runtime."""
+    return PROVIDER_V3.validate(args)
+
+
+def plan_provider_operation(target: Path, args: argparse.Namespace) -> dict[str, Any]:
+    """Create a pure, exact v3 plan without changing provider-owned state."""
+    return PROVIDER_V3.plan(target, args)
+
+
+def apply_provider_operation(target: Path, args: argparse.Namespace) -> dict[str, Any]:
+    """Apply an exact v3 plan with durable crash recovery."""
+    return PROVIDER_V3.apply(target, args)
+
+
 # --- CLI -------------------------------------------------------------------
 
 
@@ -945,6 +1070,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("list", help="List source setups.")
+    subparsers.add_parser("provider-info", help="Report provider protocol v3 capabilities.")
 
     def target_command(name: str, help_text: str) -> argparse.ArgumentParser:
         sub = subparsers.add_parser(name, help=help_text)
@@ -959,6 +1085,40 @@ def build_parser() -> argparse.ArgumentParser:
     restore = target_command("restore", "Restore a target-bound backup.")
     restore.add_argument("--backup", type=int, required=True, help="Backup slot 0..9.")
     target_command("remove", "Remove only managed setup state.")
+
+    def bundle_arguments(sub: argparse.ArgumentParser) -> None:
+        sub.add_argument("--bundle", required=True, help="Absolute ai-stp-bundle/1 ZIP path.")
+        sub.add_argument("--bundle-format", required=True)
+        sub.add_argument("--bundle-digest", required=True)
+        sub.add_argument("--artifact-digest", required=True)
+        sub.add_argument("--bundle-size", type=int, required=True)
+
+    validate = target_command("validate-bundle", "Validate an exact HarnessBundle.")
+    bundle_arguments(validate)
+    provider_plan = target_command("plan-operation", "Plan one provider v3 operation.")
+    provider_plan.add_argument("--operation", required=True)
+    provider_plan.add_argument("--provider-release-digest", required=True)
+    provider_plan.add_argument("--operation-id", required=True)
+    provider_plan.add_argument("--expires-at", required=True)
+    provider_plan.add_argument("--backup-ref")
+    provider_plan.add_argument("--bundle")
+    provider_plan.add_argument("--bundle-format")
+    provider_plan.add_argument("--bundle-digest")
+    provider_plan.add_argument("--artifact-digest")
+    provider_plan.add_argument("--bundle-size", type=int)
+    provider_apply = target_command("apply-operation", "Apply one exact provider v3 plan.")
+    provider_apply.add_argument("--plan", required=True)
+    provider_apply.add_argument("--plan-digest", required=True)
+    provider_apply.add_argument("--provider-release-digest", required=True)
+    provider_apply.add_argument("--bundle")
+    provider_apply.add_argument("--bundle-format")
+    provider_apply.add_argument("--bundle-digest")
+    provider_apply.add_argument("--artifact-digest")
+    provider_apply.add_argument("--bundle-size", type=int)
+    target_command(
+        "recover-operation",
+        "Recover or drain one interrupted provider v3 transaction.",
+    )
     return parser
 
 
@@ -977,12 +1137,32 @@ def main(argv: list[str] | None = None) -> int:
             ]
             print(json.dumps({"setups": setups}, indent=2))
             return 0
+        if args.command == "provider-info":
+            print(json.dumps(provider_info(), indent=2, sort_keys=True))
+            return 0
 
         target = resolve_target(args.target)
         as_json = getattr(args, "json", False)
 
         if args.command == "status":
-            _emit(inspect_target(target), as_json)
+            provider_status = PROVIDER_V3.status(target)
+            if provider_status["state"] in {
+                "managed",
+                "recovery_required",
+            } or provider_status.get("cleanup_state"):
+                _emit(provider_status, as_json)
+            else:
+                legacy = inspect_target(target)
+                legacy["target_digest"] = provider_status["target_digest"]
+                _emit(legacy, as_json)
+        elif args.command == "validate-bundle":
+            _emit(validate_provider_bundle(args), as_json)
+        elif args.command == "plan-operation":
+            _emit(plan_provider_operation(target, args), as_json)
+        elif args.command == "apply-operation":
+            _emit(apply_provider_operation(target, args), as_json)
+        elif args.command == "recover-operation":
+            _emit(PROVIDER_V3.recover(target), as_json)
         elif args.command == "plan":
             _emit(plan(target, load_setup(args.setup)), as_json)
         elif args.command == "apply":
@@ -997,8 +1177,26 @@ def main(argv: list[str] | None = None) -> int:
         else:  # pragma: no cover - argparse enforces the choice set
             fail(f"unknown command: {args.command}")
         return 0
-    except ManagerError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    except (ManagerError, v3.ProtocolError) as exc:
+        if getattr(args, "json", False):
+            reason = getattr(exc, "reason", "provider_error")
+            failure: dict[str, Any] = {
+                "rejected": True,
+                "reason": reason,
+                "message": str(exc),
+            }
+            if args.command == "validate-bundle":
+                failure.update(
+                    {
+                        "bundle_format": args.bundle_format,
+                        "bundle_digest": args.bundle_digest,
+                        "artifact_digest": args.artifact_digest,
+                        "bundle_size": args.bundle_size,
+                    }
+                )
+            print(json.dumps(failure, sort_keys=True))
+        else:
+            print(f"error: {exc}", file=sys.stderr)
         return 1
 
 

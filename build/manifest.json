@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "name": "nddev-claude-app",
-  "build_version": "0.1.6",
-  "entrypoint": "python3 cli-tools/nddev_claude.py",
+  "build_version": "0.2.0",
+  "entrypoint": "cli-tools/nddev_claude.py",
   "source_root": "setups",
   "setup_ids": ["stable", "edge"],
   "managed_state": {
@@ -15,13 +15,28 @@
     "target_env": "CLAUDE_CONFIG_DIR"
   },
   "command_policy": {
-    "json_supported": ["status", "plan", "apply", "switch", "restore", "remove"],
+    "json_supported": ["status", "plan", "apply", "switch", "restore", "remove", "provider-info", "validate-bundle", "plan-operation", "apply-operation", "recover-operation"],
     "plan_mutates": false,
     "status_mutates": false,
     "executes_claude_binary": false,
     "software_lifecycle_managed": false,
-    "target_required": ["status", "plan", "apply", "switch", "restore", "remove"],
+    "target_required": ["status", "plan", "apply", "switch", "restore", "remove", "validate-bundle", "plan-operation", "apply-operation", "recover-operation"],
     "restore_backup_option": "--backup <0..9>"
+  },
+  "provider_protocol": {
+    "version": 3,
+    "implementation": "cli-tools/provider_protocol_v3.py",
+    "bundle_format": "ai-stp-bundle/1",
+    "plan_format": "ai-stp-provider-plan/3",
+    "state_format": "ai-stp-provider-state/3",
+    "state_file": "NDDEV-CLAUDE-PROVIDER.json",
+    "control_directory": ".nddev-claude-provider-backups",
+    "lock_model": "canonical-target-directory-flock",
+    "mandatory_commands": ["provider-info", "validate-bundle", "plan-operation", "apply-operation", "recover-operation", "status"],
+    "supported_operations": ["backup", "install", "remove", "replace", "restore"],
+    "software_lifecycle_managed": false,
+    "launch_managed": false,
+    "exact_provenance": ["setup_version_passport_digest", "setup_definition_digest", "component_refs", "bundle_digest", "artifact_digest", "provider_plan_digest", "provider_release_digest", "native_ownership", "backup_ref"]
   },
   "backup_policy": {
     "canonical_target_bound": true,

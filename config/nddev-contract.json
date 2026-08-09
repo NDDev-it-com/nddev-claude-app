@@ -12,6 +12,9 @@
     "catalog_root": "setups",
     "stamp_file": "NDDEV-CLAUDE-SETUP.json",
     "stamp_schema": 1,
+    "identity_kind": "acquisition_channel",
+    "immutable_setup_version": false,
+    "ai_stp_immutable_path": "provider_protocol_v3",
     "commands": [
       "list",
       "status",
@@ -22,6 +25,35 @@
       "remove"
     ],
     "plan_mutates": false
+  },
+  "provider_protocol_v3": {
+    "protocol_version": 3,
+    "bundle_format": "ai-stp-bundle/1",
+    "plan_format": "ai-stp-provider-plan/3",
+    "state_format": "ai-stp-provider-state/3",
+    "entrypoint": "cli-tools/nddev_claude.py",
+    "core_commands": [
+      "provider-info",
+      "validate-bundle",
+      "plan-operation",
+      "apply-operation",
+      "recover-operation",
+      "status"
+    ],
+    "operations": ["backup", "install", "remove", "replace", "restore"],
+    "optional_operations": {
+      "launch": false,
+      "software_install": false,
+      "software_update": false,
+      "software_remove": false
+    },
+    "state_file": "NDDEV-CLAUDE-PROVIDER.json",
+    "state_schema": 3,
+    "control_directory": ".nddev-claude-provider-backups",
+    "lock_model": "canonical-target-directory-flock",
+    "prepared_and_composed_share_bundle_path": true,
+    "exact_plan_digest_required": true,
+    "post_lock_target_revalidation": true
   },
   "plugin_marketplace": {
     "marketplace_id": "nddev-builder",

@@ -61,3 +61,4 @@ module:
 
 release:
   mode: "github-release"
+  tag_style: "semver"

@@ -7,5 +7,11 @@ __pycache__/
 .serena/
 *.log
 *.tmp
-.*.nddev-codex.lock/
-.*.nddev-codex-backups/
+
+# Runtime state this manager creates. Derived from cli-tools/nddev_claude.py,
+# never copied from a sibling module: the names are product-specific and a copied
+# pattern ignores another product's artifacts while leaving this one's tracked.
+.nddev-claude-provider-backups/
+.*.nddev-claude-backups/
+.*.nddev-claude-lock/
+.*.nddev-claude-txn-*

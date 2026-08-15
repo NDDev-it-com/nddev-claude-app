@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -51,6 +52,8 @@ CATALOG_ROOT = ROOT / "setups"
 MAX_BACKUPS = 10
 OWNER_FILE_MODE = 0o600
 OWNER_DIR_MODE = 0o700
+#: The only entry this manager ever creates inside a target lock directory.
+LOCK_OWNER_NAME = "owner.json"
 MANAGED_PAYLOAD_MAX_BYTES = 4 * 1024 * 1024
 PROVIDER_STATE_NAME = "NDDEV-CLAUDE-PROVIDER.json"
 PROVIDER_STATE_SCHEMA = 3
@@ -803,30 +806,92 @@ def _create_transaction_dir(target: Path) -> Path:
 
 @contextlib.contextmanager
 def _target_lock(target: Path):
+    """Hold one target against concurrent transactions, using a kernel lock.
+
+    The directory is the visible artifact; the authority is the ``flock`` on the
+    owner file inside it. That distinction is the point. A directory alone
+    carries no ownership, so a process killed with SIGKILL, or a host that
+    loses power, used to leave one behind that no later run could tell from a
+    live transaction -- the recorded pid was written and never read. A kernel
+    lock is released when the process ends, however it ends, so a directory that
+    survives a crash is reclaimable and a directory whose lock is held is not.
+
+    A directory holding anything other than this manager's own owner file is
+    foreign. It is refused, never adopted, never written into and never removed.
+    """
     parent_st = _lstat_optional(target.parent)
     if parent_st is None:
         fail(f"--target parent must be an existing real directory: {target.parent}")
     _require_directory(target.parent, parent_st, label="--target parent", private=True)
     lock_dir = target.parent / f".{target.name}.nddev-claude-lock"
-    created = False
+    try:
+        os.mkdir(lock_dir, OWNER_DIR_MODE)
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        fail(f"cannot create target lock {lock_dir}: {exc}")
+
+    lock_st = _lstat_optional(lock_dir)
+    if lock_st is None:
+        fail(f"target lock disappeared while it was being acquired: {lock_dir}")
+    _require_directory(lock_dir, lock_st, label="target lock", private=True)
+    residue = sorted(entry.name for entry in lock_dir.iterdir())
+    if residue not in ([], [LOCK_OWNER_NAME]):
+        fail(f"target is locked by a foreign directory: {lock_dir}")
+
+    marker = lock_dir / LOCK_OWNER_NAME
+    descriptor: int | None = None
+    acquired = False
     try:
         try:
-            os.mkdir(lock_dir, OWNER_DIR_MODE)
-        except FileExistsError:
+            descriptor = os.open(
+                marker,
+                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                OWNER_FILE_MODE,
+            )
+        except OSError as exc:
+            fail(f"cannot open target lock owner {marker}: {exc}")
+        held = os.fstat(descriptor)
+        if not stat.S_ISREG(held.st_mode) or held.st_nlink != 1:
+            fail(f"target lock owner must be one regular file: {marker}")
+        if held.st_uid != os.getuid():
+            fail(f"target lock owner must be owned by this user: {marker}")
+        os.fchmod(descriptor, OWNER_FILE_MODE)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
             fail(f"target is locked by another nddev-claude-app transaction: {lock_dir}")
         except OSError as exc:
-            fail(f"cannot create target lock {lock_dir}: {exc}")
-        created = True
-        os.chmod(lock_dir, OWNER_DIR_MODE)
-        marker = lock_dir / "owner.json"
-        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, OWNER_FILE_MODE)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump({"product_name": PRODUCT_NAME, "pid": os.getpid()}, handle, sort_keys=True)
-            handle.write("\n")
+            fail(f"cannot lock target lock owner {marker}: {exc}")
+        # Between opening and locking, the owner file may have been unlinked and
+        # replaced by a transaction that finished. Locking an orphaned inode
+        # excludes nobody, so the identity is re-read after the lock is held.
+        current = _lstat_optional(marker)
+        if current is None or (current.st_dev, current.st_ino) != (held.st_dev, held.st_ino):
+            fail(f"target lock owner was replaced while it was being acquired: {marker}")
+        acquired = True
+        os.ftruncate(descriptor, 0)
+        os.write(
+            descriptor,
+            json.dumps({"product_name": PRODUCT_NAME, "pid": os.getpid()}, sort_keys=True).encode(
+                "utf-8"
+            )
+            + b"\n",
+        )
         yield
     finally:
-        if created:
-            _remove_created_dir(lock_dir)
+        # Only the transaction that held the lock removes it. A run that was
+        # refused because someone else holds it has an open descriptor on the
+        # same inode, and removing on that basis would delete a live owner's
+        # lock -- which is worse than the stale directory this replaced.
+        if descriptor is not None:
+            released = _lstat_optional(marker) if acquired else None
+            os.close(descriptor)
+            if released is not None and (released.st_dev, released.st_ino) == (
+                held.st_dev,
+                held.st_ino,
+            ):
+                _remove_created_dir(lock_dir)
 
 
 def _restore_transaction(
